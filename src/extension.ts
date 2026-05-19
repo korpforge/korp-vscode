@@ -7,16 +7,33 @@ import { TtsSession } from './tts';
 import { transcribe } from './whisper';
 import { SkillRegistry } from './skills';
 import { SkillTreeProvider } from './skill-tree';
+import { Logger, LogLevel } from './logger';
 
 const DEFAULT_GATEWAY_URL = 'http://localhost:18789';
 const SECRET_GW_KEY = 'korp.gatewayToken';
 
-const voiceLog = vscode.window.createOutputChannel('Korp Voice', { log: true });
+let log: Logger;
+let voiceLog: Logger;
+let chatLog: Logger;
 
 let tts: TtsSession;
 let skillRegistry: SkillRegistry;
 
 export function activate(context: vscode.ExtensionContext) {
+	// Logger
+	log = Logger.init();
+	voiceLog = log.child('voice');
+	chatLog = log.child('chat');
+	log.info('Korp extension activated');
+
+	const toggleLogLevelCmd = vscode.commands.registerCommand('korp.toggleLogLevel', () => {
+		const current = Logger.getLevel();
+		const next: LogLevel = current === 'debug' ? 'info' : 'debug';
+		Logger.setLevel(next);
+		const config = vscode.workspace.getConfiguration('korp');
+		config.update('logLevel', next, vscode.ConfigurationTarget.Global);
+		vscode.window.showInformationMessage(`Korp log level: ${next}`);
+	});
 	// Skills
 	skillRegistry = new SkillRegistry(context);
 	skillRegistry.load();
@@ -154,7 +171,7 @@ export function activate(context: vscode.ExtensionContext) {
 		},
 	});
 
-	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice, tts, stopSpeakingCmd, toggleTtsCmd, uriHandler, vad, toggleVadCmd, skillRegistry, treeView, toggleSkillCmd, refreshSkillsCmd, openSkillCmd);
+	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice, tts, stopSpeakingCmd, toggleTtsCmd, uriHandler, vad, toggleVadCmd, skillRegistry, treeView, toggleSkillCmd, refreshSkillsCmd, openSkillCmd, toggleLogLevelCmd, log);
 }
 
 const COMMAND_PROMPTS: Record<string, string> = {
@@ -175,6 +192,8 @@ const handler = async (
 	const gatewayUrl = config.get<string>('gatewayUrl', DEFAULT_GATEWAY_URL);
 	const gatewayToken = await extContext.secrets.get(SECRET_GW_KEY);
 	const ttsEnabled = config.get<boolean>('ttsEnabled', false);
+
+	chatLog.debug(`Request: command=${request.command || 'none'} prompt="${request.prompt.slice(0, 80)}"`);
 
 	const messages: ChatMessage[] = [];
 
