@@ -69,7 +69,18 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.window.showInformationMessage(`Korp TTS: ${!current ? 'enabled' : 'disabled'}`);
 	});
 
-	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice, tts, stopSpeakingCmd, toggleTtsCmd);
+	// URI handler for global hotkey: vscode://korpforge.korp/pushToTalk
+	const uriHandler = vscode.window.registerUriHandler({
+		handleUri(uri: vscode.Uri) {
+			if (uri.path === '/pushToTalk') {
+				vscode.commands.executeCommand('korp.pushToTalk');
+			} else if (uri.path === '/stopSpeaking') {
+				vscode.commands.executeCommand('korp.stopSpeaking');
+			}
+		},
+	});
+
+	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice, tts, stopSpeakingCmd, toggleTtsCmd, uriHandler);
 }
 
 const COMMAND_PROMPTS: Record<string, string> = {

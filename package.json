@@ -17,7 +17,8 @@
     "Chat"
   ],
   "activationEvents": [
-    "onChatParticipant:korpforge.korp"
+    "onChatParticipant:korpforge.korp",
+    "onUri"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -107,7 +108,15 @@
         "key": "ctrl+shift+k",
         "mac": "cmd+shift+k"
       }
-    ]
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "korp.pushToTalk",
+          "group": "Korp"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "tsc -p ./",
