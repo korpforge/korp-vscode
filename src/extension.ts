@@ -116,6 +116,11 @@ const handler = async (
 		messages.push({ role: 'system', content: `Active editor context:\n${contextBlock}` });
 	}
 
+	// When TTS is on, ask the LLM to include a spoken summary
+	if (ttsEnabled) {
+		messages.push({ role: 'system', content: 'The user has text-to-speech enabled. At the END of your response, add a concise 1-2 sentence spoken summary inside <spoken>...</spoken> tags. This summary should be natural French speech — no code, no JSON, no markdown. If the answer is already short and natural, just repeat it inside the tag.' });
+	}
+
 	const userContent = request.prompt || (request.command && COMMAND_PROMPTS[request.command]
 		? `Please ${request.command} the provided code.`
 		: 'Hello');
@@ -137,7 +142,11 @@ const handler = async (
 			},
 			onDone() {
 				if (ttsEnabled && fullResponse.trim()) {
-					tts.speak(fullResponse);
+					const spokenMatch = fullResponse.match(/<spoken>([\s\S]*?)<\/spoken>/);
+					const toSpeak = spokenMatch ? spokenMatch[1].trim() : '';
+					if (toSpeak) {
+						tts.speak(toSpeak);
+					}
 				}
 				resolve();
 			},
