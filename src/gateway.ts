@@ -1,6 +1,10 @@
+export interface ChatMessage {
+	role: 'system' | 'user' | 'assistant';
+	content: string;
+}
+
 export interface GatewayOptions {
 	url: string;
-	token?: string;
 	gatewayToken?: string;
 	onChunk: (text: string) => void;
 	onDone: () => void;
@@ -8,7 +12,7 @@ export interface GatewayOptions {
 	signal?: AbortSignal;
 }
 
-export async function streamCompletion(prompt: string, opts: GatewayOptions): Promise<void> {
+export async function streamCompletion(messages: ChatMessage[], opts: GatewayOptions): Promise<void> {
 	const baseUrl = opts.url.replace(/\/$/, '');
 	const endpoint = `${baseUrl}/v1/chat/completions`;
 
@@ -21,7 +25,7 @@ export async function streamCompletion(prompt: string, opts: GatewayOptions): Pr
 
 	const body = JSON.stringify({
 		model: 'openclaw/default',
-		messages: [{ role: 'user', content: prompt }],
+		messages,
 		stream: true,
 	});
 
