@@ -72,7 +72,7 @@ export class VoiceSession implements vscode.Disposable {
 				// Stopped intentionally — read the file
 				try {
 					const buffer = await readFile(this.tmpFile);
-					if (buffer.length > 44) { // WAV header is 44 bytes
+					if (buffer.length > 16044) { // At least ~0.5s of audio (16kHz mono 16-bit)
 						this.onAudioData?.(buffer);
 					}
 				} catch {

@@ -16,7 +16,10 @@ export async function transcribe(wavBuffer: Buffer, whisperUrl: string): Promise
 	const middle = Buffer.from(
 		`\r\n--${boundary}\r\n` +
 		`Content-Disposition: form-data; name="response_format"\r\n\r\n` +
-		`json`
+		`json` +
+		`\r\n--${boundary}\r\n` +
+		`Content-Disposition: form-data; name="prompt"\r\n\r\n` +
+		`Korp, Korpforge, OpenClaw, VS Code, Forgejo, développeur, code, fichier, fonction, variable, commit, branche, pull request, déploiement, terminal, debug`
 	);
 	const epilogue = Buffer.from(`\r\n--${boundary}--\r\n`);
 
@@ -37,6 +40,12 @@ export async function transcribe(wavBuffer: Buffer, whisperUrl: string): Promise
 
 	const json: any = await response.json();
 	// whisper.cpp server returns { text: "..." }
-	// faster-whisper-server returns { text: "..." } (OpenAI-compatible)
-	return (json.text ?? '').trim();
+	const raw = (json.text ?? '').trim();
+
+	// Filter Whisper hallucinations (silence, music, applause, etc.)
+	if (!raw || /^\[.*\]$/.test(raw) || /^\(.*\)$/.test(raw)) {
+		return '';
+	}
+
+	return raw;
 }
