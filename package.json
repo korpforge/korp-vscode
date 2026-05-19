@@ -1,0 +1,38 @@
+{
+  "name": "korp",
+  "displayName": "Korp",
+  "description": "Sovereign AI coding assistant — Chat Participant @korp",
+  "version": "0.0.1",
+  "publisher": "korpforge",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": ["Chat"],
+  "activationEvents": [
+    "onChatParticipant:korpforge.korp"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "korpforge.korp",
+        "name": "korp",
+        "fullName": "Korp",
+        "description": "Sovereign AI coding assistant",
+        "isSticky": true
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.93.0",
+    "typescript": "^5.5.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}
