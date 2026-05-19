@@ -81,6 +81,11 @@
           "type": "string",
           "default": "",
           "description": "Path to the rec (sox) binary for voice recording"
+        },
+        "korp.vadEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Voice Activity Detection (auto-listen when VS Code has focus)"
         }
       }
     },
@@ -100,6 +105,10 @@
       {
         "command": "korp.toggleTts",
         "title": "Korp: Toggle TTS (Text-to-Speech)"
+      },
+      {
+        "command": "korp.toggleVad",
+        "title": "Korp: Toggle VAD (Voice Activity Detection)"
       }
     ],
     "keybindings": [

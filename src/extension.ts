@@ -2,11 +2,14 @@ import * as vscode from 'vscode';
 import { ChatMessage, GatewayAdapter } from './adapter';
 import { OpenClawAdapter } from './gateway';
 import { VoiceSession } from './voice';
+import { VadSession } from './vad';
 import { TtsSession } from './tts';
 import { transcribe } from './whisper';
 
 const DEFAULT_GATEWAY_URL = 'http://localhost:18789';
 const SECRET_GW_KEY = 'korp.gatewayToken';
+
+const voiceLog = vscode.window.createOutputChannel('Korp Voice', { log: true });
 
 let tts: TtsSession;
 
@@ -35,24 +38,70 @@ export function activate(context: vscode.ExtensionContext) {
 	voice.setOnAudioData(async (wavBuffer) => {
 		const config = vscode.workspace.getConfiguration('korp');
 		const whisperUrl = config.get<string>('whisperUrl', 'http://localhost:9500');
+		voiceLog.info(`[PTT] Audio received: ${wavBuffer.length} bytes`);
 		try {
-			const text = await transcribe(wavBuffer, whisperUrl);
-			if (text) {
-				// Show transcribed text in chat input without auto-sending
-				await vscode.commands.executeCommand('workbench.action.chat.open', {
-					query: `@korp ${text}`,
-					isPartialQuery: true,
-				});
+			const result = await transcribe(wavBuffer, whisperUrl);
+			if (result) {
+				const pct = Math.round(result.confidence * 100);
+				voiceLog.info(`[PTT] Text: "${result.text}" | Confidence: ${pct}%`);
+				if (result.confidence >= 0.5) {
+					const autoSend = result.confidence >= 0.9;
+					await vscode.commands.executeCommand('workbench.action.chat.open', {
+						query: `@korp ${result.text}`,
+						isPartialQuery: !autoSend,
+					});
+					vscode.window.setStatusBarMessage(`STT: ${pct}%${autoSend ? ' (sent)' : ''}`, 3000);
+				} else {
+					voiceLog.warn(`[PTT] Rejected (low confidence ${pct}%): "${result.text}"`);
+					vscode.window.showWarningMessage(`Korp Voice: Low confidence (${pct}%) — "${result.text}"`);
+				}
 			} else {
+				voiceLog.info('[PTT] No speech detected (filtered)');
 				vscode.window.showWarningMessage('Korp Voice: No speech detected.');
 			}
 		} catch (err: any) {
+			voiceLog.error(`[PTT] Transcription error: ${err.message}`);
 			vscode.window.showErrorMessage(`Korp Voice: Transcription failed — ${err.message}`);
 		}
 	});
 
 	const pttCmd = vscode.commands.registerCommand('korp.pushToTalk', () => {
 		voice.toggle();
+	});
+
+	// VAD (Voice Activity Detection)
+	const vad = new VadSession();
+	vad.show();
+	vad.setOnAudioData(async (wavBuffer) => {
+		const config = vscode.workspace.getConfiguration('korp');
+		const whisperUrl = config.get<string>('whisperUrl', 'http://localhost:9500');
+		voiceLog.info(`[VAD] Audio received: ${wavBuffer.length} bytes`);
+		try {
+			const result = await transcribe(wavBuffer, whisperUrl);
+			if (result) {
+				const pct = Math.round(result.confidence * 100);
+				voiceLog.info(`[VAD] Text: "${result.text}" | Confidence: ${pct}%`);
+				if (result.confidence >= 0.5) {
+					const autoSend = result.confidence >= 0.9;
+					await vscode.commands.executeCommand('workbench.action.chat.open', {
+						query: `@korp ${result.text}`,
+						isPartialQuery: !autoSend,
+					});
+					vscode.window.setStatusBarMessage(`STT: ${pct}%${autoSend ? ' (sent)' : ''}`, 3000);
+				} else {
+					voiceLog.warn(`[VAD] Rejected (low confidence ${pct}%): "${result.text}"`);
+				}
+			} else {
+				voiceLog.info('[VAD] No speech detected (filtered)');
+			}
+		} catch (err: any) {
+			voiceLog.error(`[VAD] Transcription error: ${err.message}`);
+			vscode.window.showErrorMessage(`Korp VAD: Transcription failed — ${err.message}`);
+		}
+	});
+
+	const toggleVadCmd = vscode.commands.registerCommand('korp.toggleVad', () => {
+		vad.toggle();
 	});
 
 	// TTS
@@ -80,7 +129,7 @@ export function activate(context: vscode.ExtensionContext) {
 		},
 	});
 
-	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice, tts, stopSpeakingCmd, toggleTtsCmd, uriHandler);
+	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice, tts, stopSpeakingCmd, toggleTtsCmd, uriHandler, vad, toggleVadCmd);
 }
 
 const COMMAND_PROMPTS: Record<string, string> = {
