@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { ChatMessage, streamCompletion } from './gateway';
+import { ChatMessage, GatewayAdapter } from './adapter';
+import { OpenClawAdapter } from './gateway';
 
 const DEFAULT_GATEWAY_URL = 'http://localhost:18789';
 const SECRET_GW_KEY = 'korp.gatewayToken';
@@ -76,14 +77,12 @@ const handler = async (
 
 	stream.progress('Connecting to OpenClaw gateway…');
 
+	const adapter: GatewayAdapter = new OpenClawAdapter(gatewayUrl, gatewayToken || undefined);
 	const abortController = new AbortController();
 	token.onCancellationRequested(() => abortController.abort());
 
 	return new Promise<void>((resolve) => {
-		streamCompletion(messages, {
-			url: gatewayUrl,
-			gatewayToken: gatewayToken || undefined,
-			signal: abortController.signal,
+		adapter.streamChat(messages, abortController.signal, {
 			onChunk(text) {
 				stream.markdown(text);
 			},

@@ -1,103 +1,97 @@
-export interface ChatMessage {
-	role: 'system' | 'user' | 'assistant';
-	content: string;
-}
+import { ChatMessage, GatewayAdapter, StreamCallbacks } from './adapter';
 
-export interface GatewayOptions {
-	url: string;
-	gatewayToken?: string;
-	onChunk: (text: string) => void;
-	onDone: () => void;
-	onError: (err: string) => void;
-	signal?: AbortSignal;
-}
+export class OpenClawAdapter implements GatewayAdapter {
+	constructor(
+		private readonly baseUrl: string,
+		private readonly token?: string,
+	) {}
 
-export async function streamCompletion(messages: ChatMessage[], opts: GatewayOptions): Promise<void> {
-	const baseUrl = opts.url.replace(/\/$/, '');
-	const endpoint = `${baseUrl}/v1/chat/completions`;
+	async streamChat(messages: ChatMessage[], signal: AbortSignal | undefined, callbacks: StreamCallbacks): Promise<void> {
+		const endpoint = `${this.baseUrl.replace(/\/$/, '')}/v1/chat/completions`;
 
-	const headers: Record<string, string> = {
-		'Content-Type': 'application/json',
-	};
-	if (opts.gatewayToken) {
-		headers['Authorization'] = `Bearer ${opts.gatewayToken}`;
-	}
-
-	const body = JSON.stringify({
-		model: 'openclaw/default',
-		messages,
-		stream: true,
-	});
-
-	let response: Response;
-	try {
-		response = await fetch(endpoint, {
-			method: 'POST',
-			headers,
-			body,
-			signal: opts.signal,
-		});
-	} catch (err: any) {
-		if (err.name === 'AbortError') {
-			opts.onError('Cancelled');
-		} else {
-			opts.onError(`Connection error: ${err.message}`);
+		const headers: Record<string, string> = {
+			'Content-Type': 'application/json',
+		};
+		if (this.token) {
+			headers['Authorization'] = `Bearer ${this.token}`;
 		}
-		return;
-	}
 
-	if (!response.ok) {
-		const text = await response.text().catch(() => '');
-		opts.onError(`HTTP ${response.status}: ${text || response.statusText}`);
-		return;
-	}
+		const body = JSON.stringify({
+			model: 'openclaw/default',
+			messages,
+			stream: true,
+		});
 
-	const reader = response.body?.getReader();
-	if (!reader) {
-		opts.onError('No response body');
-		return;
-	}
+		let response: Response;
+		try {
+			response = await fetch(endpoint, {
+				method: 'POST',
+				headers,
+				body,
+				signal,
+			});
+		} catch (err: any) {
+			if (err.name === 'AbortError') {
+				callbacks.onError('Cancelled');
+			} else {
+				callbacks.onError(`Connection error: ${err.message}`);
+			}
+			return;
+		}
 
-	const decoder = new TextDecoder();
-	let buffer = '';
+		if (!response.ok) {
+			const text = await response.text().catch(() => '');
+			callbacks.onError(`HTTP ${response.status}: ${text || response.statusText}`);
+			return;
+		}
 
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) { break; }
+		const reader = response.body?.getReader();
+		if (!reader) {
+			callbacks.onError('No response body');
+			return;
+		}
 
-			buffer += decoder.decode(value, { stream: true });
-			const lines = buffer.split('\n');
-			buffer = lines.pop() ?? '';
+		const decoder = new TextDecoder();
+		let buffer = '';
 
-			for (const line of lines) {
-				const trimmed = line.trim();
-				if (!trimmed || trimmed.startsWith(':')) { continue; }
-				if (!trimmed.startsWith('data: ')) { continue; }
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) { break; }
 
-				const payload = trimmed.slice(6);
-				if (payload === '[DONE]') {
-					opts.onDone();
-					return;
-				}
+				buffer += decoder.decode(value, { stream: true });
+				const lines = buffer.split('\n');
+				buffer = lines.pop() ?? '';
 
-				try {
-					const chunk = JSON.parse(payload);
-					const content = chunk.choices?.[0]?.delta?.content;
-					if (content) {
-						opts.onChunk(content);
+				for (const line of lines) {
+					const trimmed = line.trim();
+					if (!trimmed || trimmed.startsWith(':')) { continue; }
+					if (!trimmed.startsWith('data: ')) { continue; }
+
+					const payload = trimmed.slice(6);
+					if (payload === '[DONE]') {
+						callbacks.onDone();
+						return;
 					}
-				} catch {
-					// skip malformed JSON lines
+
+					try {
+						const chunk = JSON.parse(payload);
+						const content = chunk.choices?.[0]?.delta?.content;
+						if (content) {
+							callbacks.onChunk(content);
+						}
+					} catch {
+						// skip malformed JSON lines
+					}
 				}
 			}
-		}
-		opts.onDone();
-	} catch (err: any) {
-		if (err.name === 'AbortError') {
-			opts.onError('Cancelled');
-		} else {
-			opts.onError(`Stream error: ${err.message}`);
+			callbacks.onDone();
+		} catch (err: any) {
+			if (err.name === 'AbortError') {
+				callbacks.onError('Cancelled');
+			} else {
+				callbacks.onError(`Stream error: ${err.message}`);
+			}
 		}
 	}
 }
