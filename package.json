@@ -155,6 +155,10 @@
       {
         "command": "korp.toggleLogLevel",
         "title": "Korp: Toggle Log Level (debug/info)"
+      },
+      {
+        "command": "korp.runOnboarding",
+        "title": "Korp: Run Onboarding Wizard"
       }
     ],
     "keybindings": [
