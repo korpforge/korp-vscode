@@ -1,24 +1,12 @@
 import * as vscode from 'vscode';
-import { spawn, execSync, ChildProcess } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { readFile, unlink } from 'fs/promises';
 
-function findRec(): string {
-	// VS Code launched from Dock doesn't inherit shell PATH
-	const candidates = [
-		'/opt/homebrew/bin/rec',
-		'/usr/local/bin/rec',
-		'/Users/' + require('os').userInfo().username + '/.homebrew/bin/rec',
-	];
-	for (const p of candidates) {
-		try {
-			execSync(`test -x "${p}"`, { stdio: 'ignore' });
-			return p;
-		} catch { /* continue */ }
-	}
-	// Fallback: hope it's in PATH
-	return 'rec';
+function getRecBin(): string {
+	const configured = vscode.workspace.getConfiguration('korp').get<string>('recBin', '');
+	return configured || 'rec';
 }
 
 export class VoiceSession implements vscode.Disposable {
@@ -62,7 +50,7 @@ export class VoiceSession implements vscode.Disposable {
 	private startRecording(): void {
 		this.tmpFile = join(tmpdir(), `korp-voice-${Date.now()}.wav`);
 
-		const recBin = findRec();
+		const recBin = getRecBin();
 
 		// Use sox's `rec` command to capture from default mic as 16kHz mono WAV
 		this.recProcess = spawn(recBin, [

@@ -1,4 +1,7 @@
+import * as vscode from 'vscode';
 import { ChatMessage, GatewayAdapter, StreamCallbacks } from './adapter';
+
+const log = vscode.window.createOutputChannel('Korp Gateway', { log: true });
 
 export class OpenClawAdapter implements GatewayAdapter {
 	constructor(
@@ -22,6 +25,8 @@ export class OpenClawAdapter implements GatewayAdapter {
 			stream: true,
 		});
 
+		log.info(`POST ${endpoint} (${messages.length} messages, stream=true)`);
+
 		let response: Response;
 		try {
 			response = await fetch(endpoint, {
@@ -32,32 +37,43 @@ export class OpenClawAdapter implements GatewayAdapter {
 			});
 		} catch (err: any) {
 			if (err.name === 'AbortError') {
+				log.info('Request aborted by user');
 				callbacks.onError('Cancelled');
 			} else {
+				log.error(`Connection error: ${err.message}`);
 				callbacks.onError(`Connection error: ${err.message}`);
 			}
 			return;
 		}
 
+		log.info(`Response: HTTP ${response.status} ${response.statusText}`);
+
 		if (!response.ok) {
 			const text = await response.text().catch(() => '');
+			log.error(`HTTP error: ${response.status} — ${text || response.statusText}`);
 			callbacks.onError(`HTTP ${response.status}: ${text || response.statusText}`);
 			return;
 		}
 
 		const reader = response.body?.getReader();
 		if (!reader) {
+			log.error('No response body (reader is null)');
 			callbacks.onError('No response body');
 			return;
 		}
 
+		log.info('SSE stream opened, waiting for chunks…');
 		const decoder = new TextDecoder();
 		let buffer = '';
+		let chunkCount = 0;
 
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
-				if (done) { break; }
+				if (done) {
+					log.info(`Stream ended (reader done). ${chunkCount} content chunks received.`);
+					break;
+				}
 
 				buffer += decoder.decode(value, { stream: true });
 				const lines = buffer.split('\n');
@@ -66,10 +82,14 @@ export class OpenClawAdapter implements GatewayAdapter {
 				for (const line of lines) {
 					const trimmed = line.trim();
 					if (!trimmed || trimmed.startsWith(':')) { continue; }
-					if (!trimmed.startsWith('data: ')) { continue; }
+					if (!trimmed.startsWith('data: ')) {
+						log.debug(`SSE non-data line: ${trimmed.slice(0, 120)}`);
+						continue;
+					}
 
 					const payload = trimmed.slice(6);
 					if (payload === '[DONE]') {
+						log.info(`SSE [DONE] after ${chunkCount} chunks.`);
 						callbacks.onDone();
 						return;
 					}
@@ -78,18 +98,21 @@ export class OpenClawAdapter implements GatewayAdapter {
 						const chunk = JSON.parse(payload);
 						const content = chunk.choices?.[0]?.delta?.content;
 						if (content) {
+							chunkCount++;
 							callbacks.onChunk(content);
 						}
 					} catch {
-						// skip malformed JSON lines
+						log.warn(`Malformed SSE JSON: ${payload.slice(0, 100)}`);
 					}
 				}
 			}
 			callbacks.onDone();
 		} catch (err: any) {
 			if (err.name === 'AbortError') {
+				log.info('Stream aborted by user');
 				callbacks.onError('Cancelled');
 			} else {
+				log.error(`Stream error: ${err.message}`);
 				callbacks.onError(`Stream error: ${err.message}`);
 			}
 		}
