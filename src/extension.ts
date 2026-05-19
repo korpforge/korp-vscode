@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { ChatMessage, GatewayAdapter } from './adapter';
 import { OpenClawAdapter } from './gateway';
+import { VoiceSession } from './voice';
+import { transcribe } from './whisper';
 
 const DEFAULT_GATEWAY_URL = 'http://localhost:18789';
 const SECRET_GW_KEY = 'korp.gatewayToken';
@@ -24,7 +26,33 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
-	context.subscriptions.push(participant, setGwTokenCmd);
+	// Voice (push-to-talk)
+	const voice = new VoiceSession();
+	voice.show();
+	voice.setOnAudioData(async (wavBuffer) => {
+		const config = vscode.workspace.getConfiguration('korp');
+		const whisperUrl = config.get<string>('whisperUrl', 'http://localhost:9500');
+		try {
+			const text = await transcribe(wavBuffer, whisperUrl);
+			if (text) {
+				// Show transcribed text in chat input without auto-sending
+				await vscode.commands.executeCommand('workbench.action.chat.open', {
+					query: `@korp ${text}`,
+					isPartialQuery: true,
+				});
+			} else {
+				vscode.window.showWarningMessage('Korp Voice: No speech detected.');
+			}
+		} catch (err: any) {
+			vscode.window.showErrorMessage(`Korp Voice: Transcription failed — ${err.message}`);
+		}
+	});
+
+	const pttCmd = vscode.commands.registerCommand('korp.pushToTalk', () => {
+		voice.toggle();
+	});
+
+	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice);
 }
 
 const COMMAND_PROMPTS: Record<string, string> = {
