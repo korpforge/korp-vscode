@@ -1,103 +1,153 @@
-# Korp — Extension VS Code
+# Korp — AI Coding Assistant (Sovereign)
 
-Assistant dev IA souverain. Chat Participant `@korp` connecté à une gateway OpenClaw.
+> Chat Participant `@korp` for VS Code — powered by your own self-hosted LLM gateway.
 
-## Prérequis
+![VS Code](https://img.shields.io/badge/VS%20Code-%3E%3D1.93-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-- VS Code ≥ 1.93
-- Une gateway OpenClaw accessible (voir `../stack/`)
-- **sox** (pour le mode voix push-to-talk)
-- **whisper-cpp** (pour la transcription STT locale)
+---
 
-### Installation des dépendances système
+## Features
 
-#### macOS
+### 💬 Chat Participant `@korp`
 
-```bash
-brew install sox whisper-cpp
-```
+Type `@korp` in the VS Code Chat panel to talk to your sovereign AI assistant. Context-aware: sends your active file, selection, and workspace skills automatically.
 
-#### Linux (Debian/Ubuntu)
+### 🎙️ Voice Input (Push-to-Talk & VAD)
 
-```bash
-sudo apt install sox
-# whisper-cpp : build from source ou utiliser faster-whisper-server en Docker
-```
+Record your voice with a single keybinding (`Cmd+Shift+K`). Powered by a local Whisper STT sidecar — no audio leaves your machine.
 
-#### Windows
+- **Push-to-Talk**: hold to record, release to transcribe
+- **Voice Activity Detection (VAD)**: auto-listen when VS Code has focus
 
-Utiliser WSL2 avec les instructions Linux, ou installer SoX depuis https://sox.sourceforge.net/
+### 🔊 Text-to-Speech (TTS)
 
-### Installation du modèle Whisper
+Hear responses read aloud via a local Piper neural voice. Toggle with `Korp: Toggle TTS`.
 
-```bash
-mkdir -p ~/.korpforge/models
-curl -L -o ~/.korpforge/models/ggml-base.bin \
-  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
-```
+### 🧩 Skills Panel
 
-Pour un modèle plus précis (recommandé pour le français) :
-```bash
-curl -L -o ~/.korpforge/models/ggml-small.bin \
-  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
-```
+Extend `@korp` with markdown skill files. Drop `.md` files in `.korp/skills/` or `~/.korp/skills/` to inject custom system prompts.
 
-### Lancer le serveur Whisper
+- Auto-detected on workspace open
+- Toggle skills on/off from the Activity Bar
+- Live reload on file changes
 
-#### macOS (Metal, natif)
+### 🚀 Onboarding Wizard
 
-```bash
-whisper-server \
-  --model ~/.korpforge/models/ggml-base.bin \
-  --port 9500 \
-  --language fr
-```
+First launch walks you through:
 
-#### Linux / Windows (Docker)
+1. Gateway URL configuration
+2. Token setup (stored securely in OS keychain)
+3. Voice/STT activation
+4. TTS preferences
 
-```bash
-# CPU
-docker run -d --name whisper \
-  -p 9500:8000 \
-  fedirz/faster-whisper-server:latest \
-  --model-size base
+Re-run anytime with **Korp: Run Onboarding Wizard**.
 
-# GPU NVIDIA
-docker run -d --name whisper \
-  --gpus all \
-  -p 9500:8000 \
-  fedirz/faster-whisper-server:latest-cuda \
-  --model-size small
-```
-
-## Développement
-
-```bash
-npm install
-npm run compile
-# F5 dans VS Code pour lancer l'Extension Development Host
-```
-
-## Configuration
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `korp.gatewayUrl` | `http://localhost:18789` | URL de la gateway OpenClaw |
-| `korp.whisperUrl` | `http://localhost:9500` | URL du sidecar Whisper STT |
-
-## Commandes
-
-| Commande | Raccourci | Description |
-|----------|-----------|-------------|
-| `Korp: Push to Talk` | `Cmd+Shift+K` | Démarrer/arrêter l'enregistrement vocal |
-| `Korp: Set Gateway Token` | — | Configurer le token de la gateway |
-| `Korp: Set LLM Token` | — | Configurer un token LLM (BYOK) |
+---
 
 ## Slash Commands
 
-| Commande | Description |
-|----------|-------------|
-| `@korp /explain` | Explique le code sélectionné ou le fichier actif |
-| `@korp /fix` | Identifie et corrige les bugs |
-| `@korp /test` | Génère des tests unitaires |
-| `@korp /docs` | Génère la documentation |
+| Command | Description |
+|---------|-------------|
+| `@korp /explain` | Explain the selected code or active file |
+| `@korp /fix` | Identify and fix bugs |
+| `@korp /test` | Generate unit tests |
+| `@korp /docs` | Generate documentation |
+
+---
+
+## Commands
+
+| Command | Keybinding | Description |
+|---------|------------|-------------|
+| Korp: Push to Talk | `Cmd+Shift+K` | Start/stop voice recording |
+| Korp: Toggle VAD | — | Enable/disable voice activity detection |
+| Korp: Toggle TTS | — | Enable/disable text-to-speech |
+| Korp: Stop Speaking | — | Interrupt current TTS playback |
+| Korp: Set Gateway Token | — | Store gateway token securely |
+| Korp: Run Onboarding Wizard | — | Re-run first-launch setup |
+| Korp: Toggle Skill | — | Enable/disable a skill |
+| Korp: Refresh Skills | — | Reload skill files |
+| Korp: Toggle Log Level | — | Switch between debug/info |
+
+---
+
+## Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `korp.gatewayUrl` | `http://localhost:18789` | OpenClaw gateway URL |
+| `korp.whisperUrl` | `http://localhost:9500` | Whisper STT sidecar URL |
+| `korp.ttsEnabled` | `false` | Enable TTS for responses |
+| `korp.ttsModel` | `~/.korpforge/models/piper/fr_FR-siwis-medium.onnx` | Piper ONNX voice model |
+| `korp.vadEnabled` | `false` | Enable voice activity detection |
+| `korp.logLevel` | `info` | Output channel log level |
+
+---
+
+## Requirements
+
+- **VS Code ≥ 1.93**
+- **OpenClaw gateway** running (self-hosted, see [stack/](https://github.com/korpforge/korp-openclaw))
+- **sox** — for voice recording (`brew install sox` / `apt install sox`)
+- **whisper-server** — local Whisper STT sidecar on port 9500
+- **piper** *(optional)* — for TTS (`brew install piper` or build from source)
+
+---
+
+## Quick Start
+
+1. Install the extension
+2. The onboarding wizard launches automatically
+3. Configure your gateway URL and token
+4. Type `@korp hello!` in the Chat panel
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────┐
+│  VS Code                                │
+│  ┌─────────┐  ┌──────┐  ┌───────────┐   │
+│  │ @korp   │  │ Voice│  │  Skills   │   │
+│  │ Chat    │  │ PTT  │  │  Panel    │   │
+│  └────┬────┘  └──┬───┘  └─────┬─────┘   │
+│       │          │            │         │
+│       ▼          ▼            │         │
+│  ┌─────────┐  ┌───────┐       │         │
+│  │OpenClaw │  │Whisper│       │         │
+│  │Gateway  │  │ STT   │       │         │
+│  │(SSE)    │  │(local)│       │         │
+│  └─────────┘  └───────┘       │         │
+│       │                       │         │
+│       ▼                       ▼         │
+│  ┌─────────┐           .korp/skills/    │
+│  │  LLM    │                            │
+│  │(self-   │                            │
+│  │ hosted) │                            │
+│  └─────────┘                            │
+└─────────────────────────────────────────┘
+```
+
+---
+
+## Development
+
+```bash
+cd vscode/
+npm install
+npm run compile
+# Press F5 to launch Extension Development Host
+```
+
+Run tests:
+```bash
+npx vitest run
+```
+
+---
+
+## License
+
+MIT © [Korpforge](https://github.com/korpforge)
