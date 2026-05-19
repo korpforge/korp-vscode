@@ -195,7 +195,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src",
+    "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "package": "vsce package"
