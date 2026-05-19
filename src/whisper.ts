@@ -1,7 +1,12 @@
 import * as vscode from 'vscode';
 import { basename } from 'path';
 
-export async function transcribe(wavBuffer: Buffer, whisperUrl: string): Promise<string> {
+export interface TranscriptionResult {
+	text: string;
+	confidence: number; // 0-1
+}
+
+export async function transcribe(wavBuffer: Buffer, whisperUrl: string): Promise<TranscriptionResult | null> {
 	const url = `${whisperUrl.replace(/\/$/, '')}/inference`;
 
 	// Build multipart/form-data manually (no external dep)
@@ -16,7 +21,10 @@ export async function transcribe(wavBuffer: Buffer, whisperUrl: string): Promise
 	const middle = Buffer.from(
 		`\r\n--${boundary}\r\n` +
 		`Content-Disposition: form-data; name="response_format"\r\n\r\n` +
-		`json` +
+		`verbose_json` +
+		`\r\n--${boundary}\r\n` +
+		`Content-Disposition: form-data; name="temperature"\r\n\r\n` +
+		`0` +
 		`\r\n--${boundary}\r\n` +
 		`Content-Disposition: form-data; name="prompt"\r\n\r\n` +
 		`Korp, Korpforge, OpenClaw, VS Code, Forgejo, développeur, code, fichier, fonction, variable, commit, branche, pull request, déploiement, terminal, debug`
@@ -39,13 +47,32 @@ export async function transcribe(wavBuffer: Buffer, whisperUrl: string): Promise
 	}
 
 	const json: any = await response.json();
-	// whisper.cpp server returns { text: "..." }
 	const raw = (json.text ?? '').trim();
 
 	// Filter Whisper hallucinations (silence, music, applause, etc.)
 	if (!raw || /^\[.*\]$/.test(raw) || /^\(.*\)$/.test(raw)) {
-		return '';
+		return null;
 	}
 
-	return raw;
+	// Filter onomatopoeia / non-speech sounds (e.g. *tousse*, *rire*, *soupir*)
+	if (/^\*[^*]+\*$/.test(raw)) {
+		return null;
+	}
+
+	// Compute average word probability as confidence score
+	let confidence = 1.0;
+	const segments = json.segments ?? [];
+	const allProbs: number[] = [];
+	for (const seg of segments) {
+		for (const w of seg.words ?? []) {
+			if (typeof w.probability === 'number') {
+				allProbs.push(w.probability);
+			}
+		}
+	}
+	if (allProbs.length > 0) {
+		confidence = allProbs.reduce((a: number, b: number) => a + b, 0) / allProbs.length;
+	}
+
+	return { text: raw, confidence };
 }
