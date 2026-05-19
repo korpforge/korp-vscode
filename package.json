@@ -5,6 +5,11 @@
   "version": "0.0.1",
   "publisher": "korpforge",
   "license": "MIT",
+  "icon": "resources/korp-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/korpforge/korp-vscode"
+  },
   "engines": {
     "vscode": "^1.93.0"
   },
