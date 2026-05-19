@@ -104,6 +104,12 @@
           "type": "boolean",
           "default": false,
           "description": "Enable Voice Activity Detection (auto-listen when VS Code has focus)"
+        },
+        "korp.logLevel": {
+          "type": "string",
+          "enum": ["debug", "info", "warn", "error"],
+          "default": "info",
+          "description": "Log level for the Korp output channel"
         }
       }
     },
@@ -140,6 +146,10 @@
       {
         "command": "korp.openSkill",
         "title": "Korp: Open Skill File"
+      },
+      {
+        "command": "korp.toggleLogLevel",
+        "title": "Korp: Toggle Log Level (debug/info)"
       }
     ],
     "keybindings": [
