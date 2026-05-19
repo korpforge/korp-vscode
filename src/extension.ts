@@ -8,6 +8,7 @@ import { transcribe } from './whisper';
 import { SkillRegistry } from './skills';
 import { SkillTreeProvider } from './skill-tree';
 import { Logger, LogLevel } from './logger';
+import { runOnboarding, isOnboarded, resetOnboarding } from './onboarding';
 
 const DEFAULT_GATEWAY_URL = 'http://localhost:18789';
 const SECRET_GW_KEY = 'korp.gatewayToken';
@@ -25,6 +26,16 @@ export function activate(context: vscode.ExtensionContext) {
 	voiceLog = log.child('voice');
 	chatLog = log.child('chat');
 	log.info('Korp extension activated');
+
+	// Onboarding (first launch)
+	if (!isOnboarded(context)) {
+		runOnboarding(context);
+	}
+
+	const runOnboardingCmd = vscode.commands.registerCommand('korp.runOnboarding', async () => {
+		await resetOnboarding(context);
+		await runOnboarding(context);
+	});
 
 	const toggleLogLevelCmd = vscode.commands.registerCommand('korp.toggleLogLevel', () => {
 		const current = Logger.getLevel();
@@ -171,7 +182,7 @@ export function activate(context: vscode.ExtensionContext) {
 		},
 	});
 
-	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice, tts, stopSpeakingCmd, toggleTtsCmd, uriHandler, vad, toggleVadCmd, skillRegistry, treeView, toggleSkillCmd, refreshSkillsCmd, openSkillCmd, toggleLogLevelCmd, log);
+	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice, tts, stopSpeakingCmd, toggleTtsCmd, uriHandler, vad, toggleVadCmd, skillRegistry, treeView, toggleSkillCmd, refreshSkillsCmd, openSkillCmd, toggleLogLevelCmd, runOnboardingCmd, log);
 }
 
 const COMMAND_PROMPTS: Record<string, string> = {
