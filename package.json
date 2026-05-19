@@ -13,7 +13,9 @@
   "engines": {
     "vscode": "^1.93.0"
   },
-  "categories": ["Chat"],
+  "categories": [
+    "Chat"
+  ],
   "activationEvents": [
     "onChatParticipant:korpforge.korp"
   ],
@@ -52,8 +54,9 @@
     "package": "vsce package"
   },
   "devDependencies": {
+    "@types/node": "^20.19.41",
     "@types/vscode": "^1.93.0",
-    "typescript": "^5.5.0",
-    "@vscode/vsce": "^3.0.0"
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.5.0"
   }
 }
