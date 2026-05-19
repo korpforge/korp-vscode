@@ -27,7 +27,17 @@
         "description": "Sovereign AI coding assistant",
         "isSticky": true
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Korp",
+      "properties": {
+        "korp.gatewayUrl": {
+          "type": "string",
+          "default": "ws://localhost:18789",
+          "description": "URL WebSocket du gateway OpenClaw"
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "tsc -p ./",
@@ -35,8 +45,12 @@
     "lint": "eslint src",
     "package": "vsce package"
   },
+  "dependencies": {
+    "ws": "^8.17.0"
+  },
   "devDependencies": {
     "@types/vscode": "^1.93.0",
+    "@types/ws": "^8.5.0",
     "typescript": "^5.5.0",
     "@vscode/vsce": "^3.0.0"
   }
