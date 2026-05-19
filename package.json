@@ -55,6 +55,11 @@
           "type": "string",
           "default": "http://localhost:18789",
           "description": "Base URL of the OpenClaw gateway"
+        },
+        "korp.whisperUrl": {
+          "type": "string",
+          "default": "http://localhost:9500",
+          "description": "URL of the Whisper STT sidecar"
         }
       }
     },
@@ -62,6 +67,17 @@
       {
         "command": "korp.setGatewayToken",
         "title": "Korp: Set Gateway Token"
+      },
+      {
+        "command": "korp.pushToTalk",
+        "title": "Korp: Push to Talk"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "korp.pushToTalk",
+        "key": "ctrl+shift+k",
+        "mac": "cmd+shift+k"
       }
     ]
   },
