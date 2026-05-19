@@ -5,6 +5,8 @@ import { VoiceSession } from './voice';
 import { VadSession } from './vad';
 import { TtsSession } from './tts';
 import { transcribe } from './whisper';
+import { SkillRegistry } from './skills';
+import { SkillTreeProvider } from './skill-tree';
 
 const DEFAULT_GATEWAY_URL = 'http://localhost:18789';
 const SECRET_GW_KEY = 'korp.gatewayToken';
@@ -12,8 +14,31 @@ const SECRET_GW_KEY = 'korp.gatewayToken';
 const voiceLog = vscode.window.createOutputChannel('Korp Voice', { log: true });
 
 let tts: TtsSession;
+let skillRegistry: SkillRegistry;
 
 export function activate(context: vscode.ExtensionContext) {
+	// Skills
+	skillRegistry = new SkillRegistry(context);
+	skillRegistry.load();
+
+	const skillTree = new SkillTreeProvider(skillRegistry);
+	const treeView = vscode.window.createTreeView('korp.skillsView', { treeDataProvider: skillTree });
+
+	const toggleSkillCmd = vscode.commands.registerCommand('korp.toggleSkill', (id: string) => {
+		skillRegistry.toggleSkill(id);
+	});
+
+	const refreshSkillsCmd = vscode.commands.registerCommand('korp.refreshSkills', () => {
+		skillRegistry.load();
+	});
+
+	const openSkillCmd = vscode.commands.registerCommand('korp.openSkill', (id: string) => {
+		const skill = skillRegistry.getSkill(id);
+		if (skill) {
+			vscode.window.showTextDocument(vscode.Uri.file(skill.filePath));
+		}
+	});
+
 	const participant = vscode.chat.createChatParticipant(
 		'korpforge.korp',
 		(req, ctx, stream, token) => handler(req, ctx, stream, token, context)
@@ -129,7 +154,7 @@ export function activate(context: vscode.ExtensionContext) {
 		},
 	});
 
-	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice, tts, stopSpeakingCmd, toggleTtsCmd, uriHandler, vad, toggleVadCmd);
+	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice, tts, stopSpeakingCmd, toggleTtsCmd, uriHandler, vad, toggleVadCmd, skillRegistry, treeView, toggleSkillCmd, refreshSkillsCmd, openSkillCmd);
 }
 
 const COMMAND_PROMPTS: Record<string, string> = {
@@ -156,6 +181,15 @@ const handler = async (
 	// Inject command-specific system prompt
 	if (request.command && COMMAND_PROMPTS[request.command]) {
 		messages.push({ role: 'system', content: COMMAND_PROMPTS[request.command] });
+	}
+
+	// Inject enabled skill prompts
+	const activeSkills = skillRegistry.enabledSkills;
+	if (activeSkills.length > 0) {
+		const skillBlock = activeSkills
+			.map(s => `## Skill: ${s.name}\n${s.systemPrompt}`)
+			.join('\n\n');
+		messages.push({ role: 'system', content: `Active skills:\n\n${skillBlock}` });
 	}
 
 	// Add file context if an editor is active

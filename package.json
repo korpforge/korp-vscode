@@ -49,6 +49,24 @@
         ]
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "korp",
+          "title": "Korp",
+          "icon": "resources/korp-icon.png"
+        }
+      ]
+    },
+    "views": {
+      "korp": [
+        {
+          "id": "korp.skillsView",
+          "name": "Skills",
+          "type": "tree"
+        }
+      ]
+    },
     "configuration": {
       "title": "Korp",
       "properties": {
@@ -109,6 +127,19 @@
       {
         "command": "korp.toggleVad",
         "title": "Korp: Toggle VAD (Voice Activity Detection)"
+      },
+      {
+        "command": "korp.toggleSkill",
+        "title": "Korp: Toggle Skill"
+      },
+      {
+        "command": "korp.refreshSkills",
+        "title": "Korp: Refresh Skills",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "korp.openSkill",
+        "title": "Korp: Open Skill File"
       }
     ],
     "keybindings": [
@@ -123,6 +154,21 @@
         {
           "command": "korp.pushToTalk",
           "group": "Korp"
+        },
+        {
+          "command": "korp.toggleSkill",
+          "when": "false"
+        },
+        {
+          "command": "korp.openSkill",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "korp.refreshSkills",
+          "when": "view == korp.skillsView",
+          "group": "navigation"
         }
       ]
     }
