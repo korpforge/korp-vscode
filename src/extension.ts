@@ -69,7 +69,10 @@ const handler = async (
 		messages.push({ role: 'system', content: `Active editor context:\n${contextBlock}` });
 	}
 
-	messages.push({ role: 'user', content: request.prompt });
+	const userContent = request.prompt || (request.command && COMMAND_PROMPTS[request.command]
+		? `Please ${request.command} the provided code.`
+		: 'Hello');
+	messages.push({ role: 'user', content: userContent });
 
 	stream.progress('Connecting to OpenClaw gateway…');
 
