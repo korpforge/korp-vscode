@@ -27,7 +27,25 @@
         "name": "korp",
         "fullName": "Korp",
         "description": "Sovereign AI coding assistant",
-        "isSticky": true
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "explain",
+            "description": "Explain the selected code or active file"
+          },
+          {
+            "name": "fix",
+            "description": "Fix errors in the selected code"
+          },
+          {
+            "name": "test",
+            "description": "Generate unit tests for the selected code"
+          },
+          {
+            "name": "docs",
+            "description": "Generate documentation for the selected code"
+          }
+        ]
       }
     ],
     "configuration": {
