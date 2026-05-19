@@ -2,10 +2,13 @@ import * as vscode from 'vscode';
 import { ChatMessage, GatewayAdapter } from './adapter';
 import { OpenClawAdapter } from './gateway';
 import { VoiceSession } from './voice';
+import { TtsSession } from './tts';
 import { transcribe } from './whisper';
 
 const DEFAULT_GATEWAY_URL = 'http://localhost:18789';
 const SECRET_GW_KEY = 'korp.gatewayToken';
+
+let tts: TtsSession;
 
 export function activate(context: vscode.ExtensionContext) {
 	const participant = vscode.chat.createChatParticipant(
@@ -52,7 +55,21 @@ export function activate(context: vscode.ExtensionContext) {
 		voice.toggle();
 	});
 
-	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice);
+	// TTS
+	tts = new TtsSession();
+
+	const stopSpeakingCmd = vscode.commands.registerCommand('korp.stopSpeaking', () => {
+		tts.stop();
+	});
+
+	const toggleTtsCmd = vscode.commands.registerCommand('korp.toggleTts', () => {
+		const config = vscode.workspace.getConfiguration('korp');
+		const current = config.get<boolean>('ttsEnabled', false);
+		config.update('ttsEnabled', !current, vscode.ConfigurationTarget.Global);
+		vscode.window.showInformationMessage(`Korp TTS: ${!current ? 'enabled' : 'disabled'}`);
+	});
+
+	context.subscriptions.push(participant, setGwTokenCmd, pttCmd, voice, tts, stopSpeakingCmd, toggleTtsCmd);
 }
 
 const COMMAND_PROMPTS: Record<string, string> = {
@@ -72,6 +89,7 @@ const handler = async (
 	const config = vscode.workspace.getConfiguration('korp');
 	const gatewayUrl = config.get<string>('gatewayUrl', DEFAULT_GATEWAY_URL);
 	const gatewayToken = await extContext.secrets.get(SECRET_GW_KEY);
+	const ttsEnabled = config.get<boolean>('ttsEnabled', false);
 
 	const messages: ChatMessage[] = [];
 
@@ -109,12 +127,18 @@ const handler = async (
 	const abortController = new AbortController();
 	token.onCancellationRequested(() => abortController.abort());
 
+	let fullResponse = '';
+
 	return new Promise<void>((resolve) => {
 		adapter.streamChat(messages, abortController.signal, {
 			onChunk(text) {
 				stream.markdown(text);
+				fullResponse += text;
 			},
 			onDone() {
+				if (ttsEnabled && fullResponse.trim()) {
+					tts.speak(fullResponse);
+				}
 				resolve();
 			},
 			onError(err) {

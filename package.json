@@ -60,6 +60,26 @@
           "type": "string",
           "default": "http://localhost:9500",
           "description": "URL of the Whisper STT sidecar"
+        },
+        "korp.ttsEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable text-to-speech for @korp responses"
+        },
+        "korp.ttsModel": {
+          "type": "string",
+          "default": "~/.korpforge/models/piper/fr_FR-siwis-medium.onnx",
+          "description": "Path to Piper ONNX voice model"
+        },
+        "korp.piperBin": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the piper binary (leave empty for auto-detection)"
+        },
+        "korp.recBin": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the rec (sox) binary for voice recording"
         }
       }
     },
@@ -71,6 +91,14 @@
       {
         "command": "korp.pushToTalk",
         "title": "Korp: Push to Talk"
+      },
+      {
+        "command": "korp.stopSpeaking",
+        "title": "Korp: Stop Speaking"
+      },
+      {
+        "command": "korp.toggleTts",
+        "title": "Korp: Toggle TTS (Text-to-Speech)"
       }
     ],
     "keybindings": [
