@@ -26,6 +26,13 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(participant, setGwTokenCmd);
 }
 
+const COMMAND_PROMPTS: Record<string, string> = {
+	explain: 'You are a code explanation assistant. Explain the provided code clearly and concisely. Cover what it does, how it works, and any notable patterns or potential issues.',
+	fix: 'You are a code repair assistant. Identify bugs, errors, or issues in the provided code and output the corrected version with a brief explanation of each fix.',
+	test: 'You are a test generation assistant. Write unit tests for the provided code using the most appropriate testing framework for the language. Aim for good coverage of edge cases.',
+	docs: 'You are a documentation assistant. Generate clear, idiomatic documentation (JSDoc, docstrings, or equivalent) for the provided code. Include parameter descriptions and return values.',
+};
+
 const handler = async (
 	request: vscode.ChatRequest,
 	_context: vscode.ChatContext,
@@ -38,6 +45,11 @@ const handler = async (
 	const gatewayToken = await extContext.secrets.get(SECRET_GW_KEY);
 
 	const messages: ChatMessage[] = [];
+
+	// Inject command-specific system prompt
+	if (request.command && COMMAND_PROMPTS[request.command]) {
+		messages.push({ role: 'system', content: COMMAND_PROMPTS[request.command] });
+	}
 
 	// Add file context if an editor is active
 	const editor = vscode.window.activeTextEditor;
