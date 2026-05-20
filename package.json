@@ -2,7 +2,7 @@
   "name": "korp",
   "displayName": "Korp",
   "description": "Sovereign AI coding assistant — Chat Participant @korp",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "korpforge",
   "license": "MIT",
   "icon": "resources/korp-icon.png",
@@ -205,6 +205,7 @@
     "@types/vscode": "^1.93.0",
     "@vitest/coverage-v8": "^4.1.6",
     "@vscode/vsce": "^3.0.0",
+    "ovsx": "^0.10.12",
     "typescript": "^5.5.0",
     "vitest": "^4.1.6"
   }
