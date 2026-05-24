@@ -3,6 +3,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
+export type SkillMode = 'passive' | 'invoke';
+
 export interface Skill {
 	id: string;
 	name: string;
@@ -11,12 +13,16 @@ export interface Skill {
 	filePath: string;
 	systemPrompt: string;
 	enabled: boolean;
+	mode: SkillMode;
+	trigger: string;
 	meta: Record<string, unknown>;
 }
 
 interface SkillFrontmatter {
 	name?: string;
 	description?: string;
+	trigger?: string;
+	mode?: string;
 	tools?: string[];
 	model?: string;
 	[key: string]: unknown;
@@ -45,8 +51,31 @@ export class SkillRegistry implements vscode.Disposable {
 		return this.skills.filter(s => s.enabled);
 	}
 
+	get passiveSkills(): Skill[] {
+		return this.enabledSkills.filter(s => s.mode === 'passive');
+	}
+
+	get invocableSkills(): Skill[] {
+		return this.skills.filter(s => s.mode === 'invoke');
+	}
+
 	getSkill(id: string): Skill | undefined {
 		return this._skills.get(id);
+	}
+
+	matchInvokedSkill(prompt: string): { skill: Skill; remainder: string } | undefined {
+		const lower = prompt.toLowerCase().trim();
+		// Sort by trigger length descending to match longest first
+		const candidates = this.invocableSkills
+			.sort((a, b) => b.trigger.length - a.trigger.length);
+		for (const skill of candidates) {
+			const trigger = skill.trigger.toLowerCase();
+			if (lower === trigger || lower.startsWith(trigger + ' ')) {
+				const remainder = prompt.trim().slice(skill.trigger.length).trim();
+				return { skill, remainder };
+			}
+		}
+		return undefined;
 	}
 
 	async toggleSkill(id: string): Promise<void> {
@@ -120,6 +149,9 @@ export class SkillRegistry implements vscode.Disposable {
 		const name = frontmatter.name || basename;
 		const description = frontmatter.description || '';
 
+		const mode: SkillMode = frontmatter.mode === 'invoke' ? 'invoke' : 'passive';
+		const trigger = (frontmatter.trigger as string) || name;
+
 		return {
 			id,
 			name,
@@ -128,6 +160,8 @@ export class SkillRegistry implements vscode.Disposable {
 			filePath,
 			systemPrompt: body.trim(),
 			enabled: !this._disabledIds.has(id),
+			mode,
+			trigger,
 			meta: frontmatter,
 		};
 	}

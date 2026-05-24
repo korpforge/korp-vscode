@@ -5,7 +5,7 @@ import { VoiceSession } from './voice';
 import { VadSession } from './vad';
 import { TtsSession } from './tts';
 import { transcribe } from './whisper';
-import { SkillRegistry } from './skills';
+import { SkillRegistry, Skill } from './skills';
 import { SkillTreeProvider } from './skill-tree';
 import { Logger, LogLevel } from './logger';
 import { runOnboarding, isOnboarded, resetOnboarding } from './onboarding';
@@ -208,18 +208,27 @@ const handler = async (
 
 	const messages: ChatMessage[] = [];
 
+	// Check if the prompt invokes a specific skill by name
+	const invocation = skillRegistry.matchInvokedSkill(request.prompt);
+
 	// Inject command-specific system prompt
 	if (request.command && COMMAND_PROMPTS[request.command]) {
 		messages.push({ role: 'system', content: COMMAND_PROMPTS[request.command] });
 	}
 
-	// Inject enabled skill prompts
-	const activeSkills = skillRegistry.enabledSkills;
-	if (activeSkills.length > 0) {
-		const skillBlock = activeSkills
-			.map(s => `## Skill: ${s.name}\n${s.systemPrompt}`)
-			.join('\n\n');
-		messages.push({ role: 'system', content: `Active skills:\n\n${skillBlock}` });
+	if (invocation) {
+		// Invoke mode: the matched skill is the sole system prompt
+		chatLog.debug(`Skill invoked: ${invocation.skill.name}`);
+		messages.push({ role: 'system', content: `## Skill: ${invocation.skill.name}\n${invocation.skill.systemPrompt}` });
+	} else {
+		// Passive mode: inject all enabled passive skill prompts
+		const activeSkills = skillRegistry.passiveSkills;
+		if (activeSkills.length > 0) {
+			const skillBlock = activeSkills
+				.map(s => `## Skill: ${s.name}\n${s.systemPrompt}`)
+				.join('\n\n');
+			messages.push({ role: 'system', content: `Active skills:\n\n${skillBlock}` });
+		}
 	}
 
 	// Add file context if an editor is active
@@ -245,9 +254,11 @@ const handler = async (
 		messages.push({ role: 'system', content: 'The user has text-to-speech enabled. At the END of your response, add a concise 1-2 sentence spoken summary inside <spoken>...</spoken> tags. This summary should be natural French speech — no code, no JSON, no markdown. If the answer is already short and natural, just repeat it inside the tag.' });
 	}
 
-	const userContent = request.prompt || (request.command && COMMAND_PROMPTS[request.command]
-		? `Please ${request.command} the provided code.`
-		: 'Hello');
+	const userContent = invocation
+		? (invocation.remainder || 'Start')
+		: request.prompt || (request.command && COMMAND_PROMPTS[request.command]
+			? `Please ${request.command} the provided code.`
+			: 'Hello');
 	messages.push({ role: 'user', content: userContent });
 
 	stream.progress('Connecting to OpenClaw gateway…');
@@ -258,8 +269,34 @@ const handler = async (
 
 	let fullResponse = '';
 
+	// Map tool names to human-readable progress labels
+	const toolLabels: Record<string, string> = {
+		dispatch_agent: 'Dispatching agent',
+		list_agents: 'Listing available agents',
+		list_issues: 'Reading issues',
+		read_file: 'Reading file',
+		write_file: 'Writing file',
+		patch_file: 'Patching file',
+		git_clone: 'Cloning repository',
+		git_branch: 'Creating branch',
+		git_commit: 'Committing changes',
+		git_push: 'Pushing to remote',
+		git_status: 'Checking git status',
+		create_pr: 'Creating pull request',
+		run_command: 'Running build/validation',
+		grep_content: 'Searching in files',
+		list_directory: 'Listing directory',
+		comment_issue: 'Commenting on issue',
+		transition_label: 'Updating issue label',
+	};
+
 	return new Promise<void>((resolve) => {
 		adapter.streamChat(messages, abortController.signal, {
+			onToolCall(tool) {
+				const label = toolLabels[tool.name] ?? tool.name;
+				stream.progress(`${label}…`);
+				chatLog.debug(`Tool call: ${tool.name}`);
+			},
 			onChunk(text) {
 				stream.markdown(text);
 				fullResponse += text;
