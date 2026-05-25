@@ -32,6 +32,39 @@ Extend `@korp` with markdown skill files. Drop `.md` files in `.korp/skills/` or
 - Toggle skills on/off from the Activity Bar
 - Live reload on file changes
 
+#### Skill Modes
+
+Skills support two modes via frontmatter:
+
+| Mode | Behaviour |
+|------|-----------|
+| `passive` (default) | Injected as background context in every message |
+| `invoke` | Activated on-demand when you type the skill name |
+
+**Invoke mode** works like BMAD Method's skill invocation — type the skill trigger directly in your prompt:
+
+```
+@korp korp-help
+@korp korp-help I just set up the stack, what's next?
+```
+
+The invoked skill becomes the sole system prompt for that request, enabling focused multi-step workflows.
+
+Example `.korp/skills/korp-help.md`:
+
+```markdown
+---
+name: korp-help
+description: Intelligent Korpforge guide
+trigger: korp-help
+mode: invoke
+---
+You are the Korpforge guide. When invoked:
+1. Inspect workspace state
+2. Determine current progress
+3. Recommend next steps
+```
+
 ### 🚀 Onboarding Wizard
 
 First launch walks you through:
@@ -82,6 +115,35 @@ Re-run anytime with **Korp: Run Onboarding Wizard**.
 | `korp.ttsModel` | `~/.korpforge/models/piper/fr_FR-siwis-medium.onnx` | Piper ONNX voice model |
 | `korp.vadEnabled` | `false` | Enable voice activity detection |
 | `korp.logLevel` | `info` | Output channel log level |
+| `korp.skillSources` | `[]` | Additional skill source directories (see below) |
+
+### `korp.skillSources`
+
+Add custom skill directories beyond the built-in scan paths. Each entry specifies a `path` and a `format`:
+
+| Format | Description |
+|--------|-------------|
+| `flat` | Single `.md` file per skill (frontmatter optional) |
+| `directory` | Each subfolder contains a `SKILL.md` entry point |
+| `proxy` | `.agent.md` files that reference another file via `LOAD` |
+
+Example in `.vscode/settings.json`:
+
+```jsonc
+{
+  "korp.skillSources": [
+    { "path": "_bmad/skills", "format": "directory" },
+    { "path": "/absolute/path/to/shared-skills", "format": "flat" }
+  ]
+}
+```
+
+Paths can be relative (resolved from workspace root) or absolute. Built-in sources scanned automatically:
+
+1. `.agents/skills/` — flat + directory
+2. `.github/agents/` — proxy
+3. `.korp/skills/` — flat *(deprecated)*
+4. `~/.korp/skills/` — flat (global)
 
 ---
 

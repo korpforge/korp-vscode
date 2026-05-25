@@ -115,6 +115,27 @@
           ],
           "default": "info",
           "description": "Log level for the Korp output channel"
+        },
+        "korp.skillSources": {
+          "type": "array",
+          "default": [],
+          "description": "Additional skill source directories. Each entry has a 'path' (relative to workspace or absolute) and 'format' (korp, bmad, or copilot).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Path to skills directory (relative to workspace root or absolute)"
+              },
+              "format": {
+                "type": "string",
+                "enum": ["flat", "directory", "proxy"],
+                "default": "flat",
+                "description": "Skill file format: flat (single .md), directory (folder/SKILL.md), proxy (.agent.md referencing another file)"
+              }
+            },
+            "required": ["path", "format"]
+          }
         }
       }
     },
