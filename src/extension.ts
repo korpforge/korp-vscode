@@ -209,14 +209,21 @@ const handler = async (
 
 	const messages: ChatMessage[] = [];
 
-	// Minimal tool-usage hint. The agent's identity and persona live in OpenClaw config
+	// Hard tool-usage discipline. The agent's identity and persona live in OpenClaw config
 	// (agents.list[].identity); the boot files are disabled via contextInjection: "never".
 	messages.push({
 		role: 'system',
-		content:
-			`You are running inside the user's VS Code editor. For any question about ` +
-			`files, code, or workspace structure, you MUST use the workspace_* tools ` +
-			`(list_files, read_file, find_files, grep). Never invent file names or content.`,
+		content: [
+			`You are running inside the user's VS Code editor with access to workspace_* tools (list_files, read_file, find_files, grep).`,
+			``,
+			`MANDATORY RULES — no exceptions:`,
+			`1. If the user mentions a file path (e.g. docs/foo.md, src/foo.ts), you MUST call workspace_read_file BEFORE writing anything. Never say "I cannot access" or "based on the summary you provided" — there is no summary. You either call the tool, or you report a tool error verbatim.`,
+			`2. If the user asks about "the code", "the project", "the files", you MUST call workspace_list_files or workspace_grep first. Never guess project structure.`,
+			`3. NEVER cite content (filenames, code, quotes) that you have not received in a tool result. If a tool result is marked truncated, say so explicitly and offer to fetch more.`,
+			`4. If a tool call returns an error, surface the error to the user — do not fabricate a fallback.`,
+			``,
+			`Always reply in the same language the user wrote in. Code and code comments stay in their original language.`,
+		].join('\n'),
 	});
 
 	// Check if the prompt invokes a specific skill by name

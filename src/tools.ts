@@ -128,11 +128,13 @@ function safeJsonParse<T = Record<string, unknown>>(raw: string): T {
 	}
 }
 
-/** Hard cap on tool result size to keep prompt under model context window. */
-const MAX_RESULT_CHARS = 8000;
+/** Hard cap on tool result size to keep prompt under model context window.
+ *  32 KB ≈ ~8 K tokens, leaves plenty of room in a 131 K context window for
+ *  multi-turn loops while letting the model see a meaningful chunk of any file. */
+const MAX_RESULT_CHARS = 32000;
 function capResult(text: string): string {
 	if (text.length <= MAX_RESULT_CHARS) { return text; }
-	return text.slice(0, MAX_RESULT_CHARS) + `\n\n…(result truncated at ${MAX_RESULT_CHARS} chars; original ${text.length})`;
+	return text.slice(0, MAX_RESULT_CHARS) + `\n\n[TRUNCATED — result capped at ${MAX_RESULT_CHARS} chars; original ${text.length}. Use a more specific query or read by ranges if you need the rest.]`;
 }
 
 /** Run a tool and return its result as a string (always a string, per OpenClaw contract). */
@@ -145,7 +147,7 @@ export async function executeTool(name: string, argsJson: string): Promise<strin
 			case 'workspace_list_files':
 				return capResult(await toolListFiles(String(args.path ?? '.')));
 			case 'workspace_read_file':
-				return capResult(await toolReadFile(String(args.path ?? ''), Number(args.max_bytes) || 8000));
+				return capResult(await toolReadFile(String(args.path ?? ''), Number(args.max_bytes) || 32000));
 			case 'workspace_find_files':
 				return capResult(await toolFindFiles(
 					String(args.pattern ?? '**/*'),
@@ -213,7 +215,10 @@ async function toolReadFile(relPath: string, maxBytes: number): Promise<string> 
 	}
 	const text = new TextDecoder('utf-8', { fatal: false }).decode(slice);
 	if (truncated) {
-		return `${text}\n\n…(truncated at ${maxBytes} bytes; full size ${bytes.byteLength})`;
+		// Prepend AND append the truncation marker so the model cannot miss it,
+		// regardless of where attention focuses.
+		const header = `[TRUNCATED — showing first ${maxBytes} of ${bytes.byteLength} bytes for ${relPath}. Call workspace_read_file again with a larger max_bytes (up to context budget) if you need more.]`;
+		return `${header}\n---\n${text}\n---\n${header}`;
 	}
 	return text;
 }
