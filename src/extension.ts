@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ChatMessage, GatewayAdapter } from './adapter';
 import { OpenClawAdapter } from './gateway';
+import { WORKSPACE_TOOLS, executeTool, toolProgressLabel } from './tools';
 import { VoiceSession } from './voice';
 import { VadSession } from './vad';
 import { TtsSession } from './tts';
@@ -208,6 +209,16 @@ const handler = async (
 
 	const messages: ChatMessage[] = [];
 
+	// Minimal tool-usage hint. The agent's identity and persona live in OpenClaw config
+	// (agents.list[].identity); the boot files are disabled via contextInjection: "never".
+	messages.push({
+		role: 'system',
+		content:
+			`You are running inside the user's VS Code editor. For any question about ` +
+			`files, code, or workspace structure, you MUST use the workspace_* tools ` +
+			`(list_files, read_file, find_files, grep). Never invent file names or content.`,
+	});
+
 	// Check if the prompt invokes a specific skill by name
 	const invocation = skillRegistry.matchInvokedSkill(request.prompt);
 
@@ -231,22 +242,30 @@ const handler = async (
 		}
 	}
 
-	// Add file context if an editor is active
+	// Add a SLIM hint about the active editor — the LLM can use workspace_read_file
+	// to fetch full content on demand. We only inject explicit selections (small, intentional).
 	const editor = vscode.window.activeTextEditor;
 	if (editor) {
 		const doc = editor.document;
 		const selection = editor.selection;
-		let contextBlock = `File: ${vscode.workspace.asRelativePath(doc.uri)}\nLanguage: ${doc.languageId}\n`;
+		const relPath = vscode.workspace.asRelativePath(doc.uri);
 		if (!selection.isEmpty) {
 			const selectedText = doc.getText(selection);
-			contextBlock += `\nSelected text (lines ${selection.start.line + 1}-${selection.end.line + 1}):\n\`\`\`\n${selectedText}\n\`\`\``;
+			const capped = selectedText.length > 4000 ? selectedText.slice(0, 4000) + '\n…(truncated)' : selectedText;
+			messages.push({
+				role: 'system',
+				content:
+					`Active editor selection — file: ${relPath} (${doc.languageId}), ` +
+					`lines ${selection.start.line + 1}-${selection.end.line + 1}:\n\`\`\`\n${capped}\n\`\`\``,
+			});
 		} else {
-			const fullText = doc.getText();
-			const maxChars = 12000;
-			const truncated = fullText.length > maxChars ? fullText.slice(0, maxChars) + '\n…(truncated)' : fullText;
-			contextBlock += `\nFull content:\n\`\`\`\n${truncated}\n\`\`\``;
+			messages.push({
+				role: 'system',
+				content:
+					`Active editor: ${relPath} (${doc.languageId}). ` +
+					`Use workspace_read_file to fetch its content if relevant.`,
+			});
 		}
-		messages.push({ role: 'system', content: `Active editor context:\n${contextBlock}` });
 	}
 
 	// When TTS is on, ask the LLM to include a spoken summary
@@ -268,59 +287,84 @@ const handler = async (
 	token.onCancellationRequested(() => abortController.abort());
 
 	let fullResponse = '';
+	const MAX_TURNS = 8;
+	const recentCalls: string[] = []; // signatures of last tool calls to detect loops
 
-	// Map tool names to human-readable progress labels
-	const toolLabels: Record<string, string> = {
-		dispatch_agent: 'Dispatching agent',
-		list_agents: 'Listing available agents',
-		list_issues: 'Reading issues',
-		read_file: 'Reading file',
-		write_file: 'Writing file',
-		patch_file: 'Patching file',
-		git_clone: 'Cloning repository',
-		git_branch: 'Creating branch',
-		git_commit: 'Committing changes',
-		git_push: 'Pushing to remote',
-		git_status: 'Checking git status',
-		create_pr: 'Creating pull request',
-		run_command: 'Running build/validation',
-		grep_content: 'Searching in files',
-		list_directory: 'Listing directory',
-		comment_issue: 'Commenting on issue',
-		transition_label: 'Updating issue label',
-	};
+	for (let turn = 0; turn < MAX_TURNS; turn++) {
+		if (abortController.signal.aborted) { break; }
 
-	return new Promise<void>((resolve) => {
-		adapter.streamChat(messages, abortController.signal, {
+		let errorBubbled: string | undefined;
+		const result = await adapter.streamChat(messages, abortController.signal, {
 			onToolCall(tool) {
-				const label = toolLabels[tool.name] ?? tool.name;
-				stream.progress(`${label}…`);
-				chatLog.debug(`Tool call: ${tool.name}`);
+				// Progress is emitted from the execute loop below — keep this silent
+				// to avoid duplicate "Listing files…" messages.
+				chatLog.debug(`Tool call (turn ${turn}): ${tool.name}`);
 			},
 			onChunk(text) {
 				stream.markdown(text);
 				fullResponse += text;
 			},
-			onDone() {
-				if (ttsEnabled && fullResponse.trim()) {
-					const spokenMatch = fullResponse.match(/<spoken>([\s\S]*?)<\/spoken>/);
-					const toSpeak = spokenMatch ? spokenMatch[1].trim() : '';
-					if (toSpeak) {
-						tts.speak(toSpeak);
-					}
-				}
-				resolve();
-			},
+			onDone() { /* loop continues based on result */ },
 			onError(err) {
-				if (err === 'Cancelled') {
-					resolve();
-				} else {
-					stream.markdown(`\n\n⚠️ **Gateway error** : ${err}`);
-					resolve();
-				}
+				errorBubbled = err;
 			},
+		}, {
+			tools: WORKSPACE_TOOLS,
+			toolChoice: 'auto',
 		});
-	});
+
+		if (errorBubbled) {
+			if (errorBubbled !== 'Cancelled') {
+				stream.markdown(`\n\n⚠️ **Gateway error** : ${errorBubbled}`);
+			}
+			break;
+		}
+
+		if (result.finishReason !== 'tool_calls' || result.toolCalls.length === 0) {
+			chatLog.debug(`Turn ${turn} done: finish=${result.finishReason}`);
+			break;
+		}
+
+		// Append the assistant tool-call turn and execute each tool locally.
+		messages.push({
+			role: 'assistant',
+			content: result.assistantContent,
+			tool_calls: result.toolCalls,
+		});
+
+		for (const call of result.toolCalls) {
+			const signature = `${call.name}::${call.arguments}`;
+			const repeatCount = recentCalls.filter(s => s === signature).length;
+			recentCalls.push(signature);
+
+			stream.progress(`${toolProgressLabel(call.name)}…`);
+			chatLog.info(`Executing ${call.name}(${call.arguments.slice(0, 200)})`);
+			const toolResult = await executeTool(call.name, call.arguments);
+			messages.push({
+				role: 'tool',
+				tool_call_id: call.id,
+				content: toolResult,
+			});
+
+			// Loop guard: if the LLM has called the same tool with identical args
+			// 2+ times, nudge it to stop and answer with what it has.
+			if (repeatCount >= 1) {
+				chatLog.info(`Loop detected on ${call.name} — injecting nudge`);
+				messages.push({
+					role: 'system',
+					content: `You have already called ${call.name} with these exact arguments. Do not repeat the same call. Use the results you already have to answer the user now, in natural language. If results are insufficient, try a DIFFERENT tool or DIFFERENT arguments — never the same call twice.`,
+				});
+			}
+		}
+	}
+
+	if (ttsEnabled && fullResponse.trim()) {
+		const spokenMatch = fullResponse.match(/<spoken>([\s\S]*?)<\/spoken>/);
+		const toSpeak = spokenMatch ? spokenMatch[1].trim() : '';
+		if (toSpeak) {
+			tts.speak(toSpeak);
+		}
+	}
 };
 
 export function deactivate() {}

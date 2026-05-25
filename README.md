@@ -13,6 +13,29 @@
 
 Type `@korp` in the VS Code Chat panel to talk to your sovereign AI assistant. Context-aware: sends your active file, selection, and workspace skills automatically.
 
+### 🛠️ Agentic Workspace Tools
+
+`@korp` is **workspace-aware**: it doesn't guess file contents — it inspects your project on demand using a built-in tool protocol, the same way Copilot or Claude Code work, but routed through your sovereign gateway.
+
+The LLM can call these tools autonomously, in multi-turn loops:
+
+| Tool | Purpose |
+|------|---------|
+| `workspace_list_files` | List files in a directory |
+| `workspace_read_file` | Read a file (capped at 8 KB by default) |
+| `workspace_find_files` | Glob-match files by pattern |
+| `workspace_grep` | Search file contents (literal or regex) |
+
+**Examples:**
+
+```
+@korp Liste les fichiers TypeScript du projet
+@korp Cherche les TODO dans le code
+@korp Explique ce que fait src/extension.ts
+```
+
+Each tool call appears as a progress message in the chat. The agentic loop is capped at 8 turns and includes a loop-guard that nudges the LLM if it repeats an identical call. Tools run **client-side**, in the user's VS Code workspace — your code never leaves your machine unless the LLM asks for a specific snippet.
+
 ### 🎙️ Voice Input (Push-to-Talk & VAD)
 
 Record your voice with a single keybinding (`Cmd+Shift+K`). Powered by a local Whisper STT sidecar — no audio leaves your machine.
