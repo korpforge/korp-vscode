@@ -45,6 +45,34 @@
           {
             "name": "docs",
             "description": "Generate documentation for the selected code"
+          },
+          {
+            "name": "architect",
+            "description": "Ask @architect: technical design for a story (read-only)"
+          },
+          {
+            "name": "coder",
+            "description": "Ask @coder: implement a ticket and open a PR"
+          },
+          {
+            "name": "reviewer",
+            "description": "Ask @reviewer: review a PR against the design"
+          },
+          {
+            "name": "security",
+            "description": "Ask @security: audit code/PR for OWASP, secrets, deps"
+          },
+          {
+            "name": "tester",
+            "description": "Ask @tester: write tests and gate coverage"
+          },
+          {
+            "name": "docwriter",
+            "description": "Ask @docwriter: update README/CHANGELOG/docs (separate PR)"
+          },
+          {
+            "name": "deployer",
+            "description": "Ask @deployer: deploy staging and request prod approval"
           }
         ]
       }

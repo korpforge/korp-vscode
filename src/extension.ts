@@ -193,9 +193,23 @@ const COMMAND_PROMPTS: Record<string, string> = {
 	docs: 'You are a documentation assistant. Generate clear, idiomatic documentation (JSDoc, docstrings, or equivalent) for the provided code. Include parameter descriptions and return values.',
 };
 
+// Slash-commands that route to OpenClaw forge subagents (see openclaw.json agents.list).
+// Each maps to a model identifier resolved by the OpenClaw gateway as `openclaw/<agentId>`.
+// Subagents run in their own workspace (profile A = empty-workspace, profile B = container workspace)
+// and DO NOT receive the workspace_* tools — they use their native OpenClaw tool set.
+const SUBAGENT_COMMANDS: Record<string, { agentId: string; icon: string; label: string }> = {
+	architect: { agentId: 'architect', icon: '🏗️', label: 'Architect' },
+	coder:     { agentId: 'coder',     icon: '👨‍💻', label: 'Coder' },
+	reviewer:  { agentId: 'reviewer',  icon: '🔍', label: 'Reviewer' },
+	security:  { agentId: 'security',  icon: '🛡️', label: 'Security' },
+	tester:    { agentId: 'tester',    icon: '🧪', label: 'Tester' },
+	docwriter: { agentId: 'docwriter', icon: '📝', label: 'DocWriter' },
+	deployer:  { agentId: 'deployer',  icon: '🚀', label: 'Deployer' },
+};
+
 const handler = async (
 	request: vscode.ChatRequest,
-	_context: vscode.ChatContext,
+	chatContext: vscode.ChatContext,
 	stream: vscode.ChatResponseStream,
 	token: vscode.CancellationToken,
 	extContext: vscode.ExtensionContext
@@ -206,6 +220,20 @@ const handler = async (
 	const ttsEnabled = config.get<boolean>('ttsEnabled', false);
 
 	chatLog.debug(`Request: command=${request.command || 'none'} prompt="${request.prompt.slice(0, 80)}"`);
+
+	// Slash-command → forge subagent route (bypasses @korp workspace tools).
+	if (request.command && SUBAGENT_COMMANDS[request.command]) {
+		await handleSubagentRequest(
+			SUBAGENT_COMMANDS[request.command],
+			request,
+			chatContext,
+			stream,
+			token,
+			gatewayUrl,
+			gatewayToken,
+		);
+		return;
+	}
 
 	const messages: ChatMessage[] = [];
 
@@ -375,3 +403,183 @@ const handler = async (
 };
 
 export function deactivate() {}
+
+async function handleSubagentRequest(
+	subagent: { agentId: string; icon: string; label: string },
+	request: vscode.ChatRequest,
+	chatContext: vscode.ChatContext,
+	stream: vscode.ChatResponseStream,
+	token: vscode.CancellationToken,
+	gatewayUrl: string,
+	gatewayToken: string | undefined,
+) {
+	const model = `openclaw/${subagent.agentId}`;
+	chatLog.info(`Spawning subagent ${subagent.agentId} (model=${model})`);
+
+	const prompt = request.prompt?.trim();
+	if (!prompt) {
+		stream.markdown(`${subagent.icon} **@${subagent.agentId}** — please provide a prompt after the slash-command.`);
+		return;
+	}
+
+	stream.markdown(`${subagent.icon} **@${subagent.agentId}** is on it…\n\n`);
+
+	// Subagents get the SAME workspace_* tool proxy as @korp. These tools are executed
+	// locally by the VS Code extension (not by OpenClaw), so the agent's OpenClaw-side
+	// tool deny list (read/write/edit/exec) does not block them.
+	const messages: ChatMessage[] = [];
+	messages.push({
+		role: 'system',
+		content: [
+			`You are running as the @${subagent.agentId} forge subagent, spawned from a VS Code chat.`,
+			`You have access to workspace_* tools (list_files, read_file, find_files, grep) that read the user's workspace via the VS Code extension proxy.`,
+			``,
+			`MANDATORY RULES:`,
+			`1. NEVER mention "bootstrap", "BOOTSTRAP.md", "workspace not bootstrapped", "identity setup", or any onboarding ritual. You are ALREADY operational.`,
+			`2. If the answer is already present in the "Prior conversation" block below, answer DIRECTLY without calling tools. Re-read past turns BEFORE exploring the filesystem.`,
+			`3. If you must explore, call AT MOST 2 listing/finding tools (workspace_list_files, workspace_find_files, workspace_grep) before reading a specific file with workspace_read_file. Do NOT keep listing.`,
+			`4. NEVER cite content you have not received in a tool result or in the prior conversation.`,
+			`5. If a tool call returns an error, surface it verbatim — do not fabricate.`,
+			``,
+			`Always reply in the same language the user wrote in. Code stays in its original language.`,
+		].join('\n'),
+	});
+
+	// Inject prior chat turns as a SINGLE saliency-boosted system block (instead of fake user/assistant
+	// turns) so the subagent treats it as authoritative context rather than just "another exchange".
+	const history = chatContext.history ?? [];
+	const historyLines: string[] = [];
+	for (const turn of history) {
+		if (turn instanceof vscode.ChatRequestTurn) {
+			const prefix = turn.command ? `/${turn.command} ` : '';
+			historyLines.push(`### 👤 User: ${prefix}${turn.prompt}`.slice(0, 4000));
+		} else if (turn instanceof vscode.ChatResponseTurn) {
+			const text = turn.response
+				.map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
+				.join('').trim();
+			if (text) {
+				historyLines.push(`### 🤖 Assistant:\n${text}`.slice(0, 4000));
+			}
+		}
+	}
+	if (historyLines.length > 0) {
+		messages.push({
+			role: 'system',
+			content: `Prior conversation in this VS Code chat (use it as your primary context — do not re-explore what is already here):\n\n${historyLines.join('\n\n')}`,
+		});
+	}
+
+	// Inject active editor context (same pattern as @korp).
+	const editor = vscode.window.activeTextEditor;
+	if (editor) {
+		const doc = editor.document;
+		const selection = editor.selection;
+		const relPath = vscode.workspace.asRelativePath(doc.uri);
+		if (!selection.isEmpty) {
+			const selectedText = doc.getText(selection);
+			const capped = selectedText.length > 4000 ? selectedText.slice(0, 4000) + '\n…(truncated)' : selectedText;
+			messages.push({
+				role: 'system',
+				content:
+					`Active editor selection — file: ${relPath} (${doc.languageId}), ` +
+					`lines ${selection.start.line + 1}-${selection.end.line + 1}:\n\`\`\`\n${capped}\n\`\`\``,
+			});
+		} else {
+			messages.push({
+				role: 'system',
+				content:
+					`Active editor: ${relPath} (${doc.languageId}). ` +
+					`Use workspace_read_file to fetch its content if relevant.`,
+			});
+		}
+	}
+
+	messages.push({ role: 'user', content: prompt });
+
+	const adapter: GatewayAdapter = new OpenClawAdapter(gatewayUrl, gatewayToken || undefined);
+	const abortController = new AbortController();
+	token.onCancellationRequested(() => abortController.abort());
+
+	const MAX_TURNS = 8;
+	const MAX_EXPLORATION_CALLS = 3; // list_files + find_files + grep, combined
+	const EXPLORATION_TOOLS = new Set([
+		'workspace_list_files',
+		'workspace_find_files',
+		'workspace_grep',
+	]);
+	const recentCalls: string[] = [];
+	let explorationCount = 0;
+
+	for (let turn = 0; turn < MAX_TURNS; turn++) {
+		if (abortController.signal.aborted) { break; }
+
+		let errorBubbled: string | undefined;
+		const result = await adapter.streamChat(messages, abortController.signal, {
+			onToolCall(tool) {
+				chatLog.debug(`[${subagent.agentId}] turn=${turn} tool=${tool.name}`);
+			},
+			onChunk(text) {
+				stream.markdown(text);
+			},
+			onDone() {},
+			onError(err) {
+				errorBubbled = err;
+			},
+		}, {
+			model,
+			tools: WORKSPACE_TOOLS,
+			toolChoice: 'auto',
+		});
+
+		if (errorBubbled) {
+			if (errorBubbled !== 'Cancelled') {
+				stream.markdown(`\n\n⚠️ **${subagent.label} error** : ${errorBubbled}`);
+			}
+			return;
+		}
+
+		if (result.finishReason !== 'tool_calls' || result.toolCalls.length === 0) {
+			chatLog.debug(`[${subagent.agentId}] done: finish=${result.finishReason}`);
+			return;
+		}
+
+		messages.push({
+			role: 'assistant',
+			content: result.assistantContent,
+			tool_calls: result.toolCalls,
+		});
+
+		for (const call of result.toolCalls) {
+			const signature = `${call.name}::${call.arguments}`;
+			const repeatCount = recentCalls.filter(s => s === signature).length;
+			recentCalls.push(signature);
+			if (EXPLORATION_TOOLS.has(call.name)) {
+				explorationCount += 1;
+			}
+
+			stream.progress(`${subagent.icon} ${toolProgressLabel(call.name)}…`);
+			chatLog.info(`[${subagent.agentId}] exec ${call.name}(${call.arguments.slice(0, 200)})`);
+			const toolResult = await executeTool(call.name, call.arguments);
+			messages.push({
+				role: 'tool',
+				tool_call_id: call.id,
+				content: toolResult,
+			});
+
+			if (repeatCount >= 1) {
+				chatLog.info(`[${subagent.agentId}] loop on ${call.name} — nudging`);
+				messages.push({
+					role: 'system',
+					content: `You have already called ${call.name} with these exact arguments. Do not repeat. Answer with what you have, or try a DIFFERENT tool / DIFFERENT arguments.`,
+				});
+			}
+			if (explorationCount >= MAX_EXPLORATION_CALLS && EXPLORATION_TOOLS.has(call.name)) {
+				chatLog.info(`[${subagent.agentId}] exploration budget exhausted (${explorationCount}) — forcing answer`);
+				messages.push({
+					role: 'system',
+					content: `You have used your exploration budget (${MAX_EXPLORATION_CALLS} listing/finding/grep calls). STOP exploring. Either call workspace_read_file on a SPECIFIC file you need, or ANSWER NOW with what you already have from the conversation history and prior tool results. Do not make any more list/find/grep calls.`,
+				});
+			}
+		}
+	}
+}
