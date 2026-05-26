@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-05-26
+
 ### Added
 
 - **Agentic workspace tools** — `@korp` now uses a client-side tool protocol to inspect the workspace on demand (`workspace_list_files`, `workspace_read_file`, `workspace_find_files`, `workspace_grep`). The LLM can call tools autonomously in multi-turn loops (capped at 8 turns), with a loop-guard that detects identical repeated calls.
@@ -50,5 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Text-to-speech via local Piper voice model.
 - Slash commands: `/explain`, `/fix`, `/test`, `/docs`.
 
-[Unreleased]: https://github.com/korpforge/korpforge/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/korpforge/korpforge/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/korpforge/korpforge/releases/tag/v0.1.0
 [0.0.3]: https://github.com/korpforge/korpforge/releases/tag/v0.0.3

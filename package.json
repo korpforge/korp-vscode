@@ -2,7 +2,7 @@
   "name": "korp",
   "displayName": "Korp",
   "description": "Sovereign AI coding assistant — Chat Participant @korp",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "publisher": "korpforge",
   "license": "MIT",
   "icon": "resources/korp-icon.png",
