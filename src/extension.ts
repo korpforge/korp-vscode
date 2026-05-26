@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { ChatMessage, GatewayAdapter } from './adapter';
 import { OpenClawAdapter } from './gateway';
 import { WORKSPACE_TOOLS, executeTool, toolProgressLabel } from './tools';
@@ -10,6 +12,8 @@ import { SkillRegistry, Skill } from './skills';
 import { SkillTreeProvider } from './skill-tree';
 import { Logger, LogLevel } from './logger';
 import { runOnboarding, isOnboarded, resetOnboarding } from './onboarding';
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_GATEWAY_URL = 'http://localhost:18789';
 const SECRET_GW_KEY = 'korp.gatewayToken';
@@ -197,15 +201,59 @@ const COMMAND_PROMPTS: Record<string, string> = {
 // Each maps to a model identifier resolved by the OpenClaw gateway as `openclaw/<agentId>`.
 // Subagents run in their own workspace (profile A = empty-workspace, profile B = container workspace)
 // and DO NOT receive the workspace_* tools — they use their native OpenClaw tool set.
-const SUBAGENT_COMMANDS: Record<string, { agentId: string; icon: string; label: string }> = {
-	architect: { agentId: 'architect', icon: '🏗️', label: 'Architect' },
-	coder:     { agentId: 'coder',     icon: '👨‍💻', label: 'Coder' },
-	reviewer:  { agentId: 'reviewer',  icon: '🔍', label: 'Reviewer' },
-	security:  { agentId: 'security',  icon: '🛡️', label: 'Security' },
-	tester:    { agentId: 'tester',    icon: '🧪', label: 'Tester' },
-	docwriter: { agentId: 'docwriter', icon: '📝', label: 'DocWriter' },
-	deployer:  { agentId: 'deployer',  icon: '🚀', label: 'Deployer' },
+//
+// `profile`:
+//   'A' = read-only / advisory (no write to repo)
+//   'B' = write-capable (opens PRs via git-mcp + forgejo-mcp). Requires clean user workspace.
+interface SubagentCommand {
+	agentId: string;
+	icon: string;
+	label: string;
+	profile: 'A' | 'B';
+}
+
+const SUBAGENT_COMMANDS: Record<string, SubagentCommand> = {
+	architect: { agentId: 'architect', icon: '🏗️', label: 'Architect', profile: 'A' },
+	coder:     { agentId: 'coder',     icon: '👨‍💻', label: 'Coder',     profile: 'B' },
+	reviewer:  { agentId: 'reviewer',  icon: '🔍', label: 'Reviewer',  profile: 'A' },
+	security:  { agentId: 'security',  icon: '🛡️', label: 'Security',  profile: 'A' },
+	tester:    { agentId: 'tester',    icon: '🧪', label: 'Tester',    profile: 'B' },
+	docwriter: { agentId: 'docwriter', icon: '📝', label: 'DocWriter', profile: 'B' },
+	deployer:  { agentId: 'deployer',  icon: '🚀', label: 'Deployer',  profile: 'A' },
 };
+
+/**
+ * Pre-check before spawning a Profil B (write-capable) subagent.
+ * Runs `git status --porcelain` in the user's workspace root.
+ *
+ * Returns:
+ *   { clean: true }                       — safe to spawn
+ *   { clean: false, dirtyFiles: string }  — refuse, surface the porcelain output
+ *   { clean: true, warning: string }      — unable to check (no workspace, no git);
+ *                                           proceed but log a warning
+ */
+async function checkWorkspaceClean(): Promise<{ clean: boolean; dirtyFiles?: string; warning?: string }> {
+	const folder = vscode.workspace.workspaceFolders?.[0];
+	if (!folder) {
+		return { clean: true, warning: 'no workspace folder open — skipping git pre-check' };
+	}
+	const cwd = folder.uri.fsPath;
+	try {
+		const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
+			cwd,
+			timeout: 5000,
+			maxBuffer: 1024 * 1024,
+		});
+		const porcelain = stdout.trim();
+		if (porcelain.length === 0) {
+			return { clean: true };
+		}
+		return { clean: false, dirtyFiles: porcelain };
+	} catch (err: unknown) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return { clean: true, warning: `git status failed (${msg.split('\n')[0]}) — skipping pre-check` };
+	}
+}
 
 const handler = async (
 	request: vscode.ChatRequest,
@@ -405,7 +453,7 @@ const handler = async (
 export function deactivate() {}
 
 async function handleSubagentRequest(
-	subagent: { agentId: string; icon: string; label: string },
+	subagent: SubagentCommand,
 	request: vscode.ChatRequest,
 	chatContext: vscode.ChatContext,
 	stream: vscode.ChatResponseStream,
@@ -414,12 +462,30 @@ async function handleSubagentRequest(
 	gatewayToken: string | undefined,
 ) {
 	const model = `openclaw/${subagent.agentId}`;
-	chatLog.info(`Spawning subagent ${subagent.agentId} (model=${model})`);
+	chatLog.info(`Spawning subagent ${subagent.agentId} (profile=${subagent.profile}, model=${model})`);
 
 	const prompt = request.prompt?.trim();
 	if (!prompt) {
 		stream.markdown(`${subagent.icon} **@${subagent.agentId}** — please provide a prompt after the slash-command.`);
 		return;
+	}
+
+	// Profil B (write-capable) pre-check: refuse if the user workspace has uncommitted changes,
+	// to avoid race conditions between the agent's PR and the user's in-progress work.
+	if (subagent.profile === 'B') {
+		const check = await checkWorkspaceClean();
+		if (!check.clean) {
+			chatLog.warn(`Profil B spawn blocked: workspace dirty (${subagent.agentId})`);
+			stream.markdown(
+				`⚠️ **@${subagent.agentId} is a write-capable agent and cannot run on a dirty workspace.**\n\n` +
+				`Commit, stash or discard your local changes, then try again.\n\n` +
+				`<details><summary>Uncommitted changes</summary>\n\n\`\`\`\n${check.dirtyFiles}\n\`\`\`\n</details>`,
+			);
+			return;
+		}
+		if (check.warning) {
+			chatLog.warn(`Profil B pre-check: ${check.warning}`);
+		}
 	}
 
 	stream.markdown(`${subagent.icon} **@${subagent.agentId}** is on it…\n\n`);
