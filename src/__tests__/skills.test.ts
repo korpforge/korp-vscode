@@ -27,7 +27,14 @@ tools: [readFile, grep]
 ---
 Tu es un reviewer senior.`;
 
-		vi.spyOn(fs, 'readdirSync').mockReturnValue(['reviewer.md'] as any);
+		vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+		vi.spyOn(fs, 'readdirSync').mockImplementation((_path: any, _opts?: any) => {
+			if (_opts && typeof _opts === 'object' && 'withFileTypes' in _opts) {
+				return [] as any;
+			}
+			return ['reviewer.md'] as any;
+		});
+		vi.spyOn(fs, 'statSync').mockReturnValue({ isFile: () => true } as any);
 		vi.spyOn(fs, 'readFileSync').mockReturnValue(content);
 
 		const registry = new SkillRegistry(mockContext);
@@ -47,7 +54,14 @@ Tu es un reviewer senior.`;
 	it('parses a skill file without frontmatter', async () => {
 		const content = `Just a raw prompt without any YAML header.`;
 
-		vi.spyOn(fs, 'readdirSync').mockReturnValue(['raw.md'] as any);
+		vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+		vi.spyOn(fs, 'readdirSync').mockImplementation((_path: any, _opts?: any) => {
+			if (_opts && typeof _opts === 'object' && 'withFileTypes' in _opts) {
+				return [] as any;
+			}
+			return ['raw.md'] as any;
+		});
+		vi.spyOn(fs, 'statSync').mockReturnValue({ isFile: () => true } as any);
 		vi.spyOn(fs, 'readFileSync').mockReturnValue(content);
 
 		const registry = new SkillRegistry(mockContext);
@@ -60,9 +74,7 @@ Tu es un reviewer senior.`;
 	});
 
 	it('handles missing directory gracefully', async () => {
-		vi.spyOn(fs, 'readdirSync').mockImplementation(() => {
-			throw new Error('ENOENT');
-		});
+		vi.spyOn(fs, 'existsSync').mockReturnValue(false);
 
 		const registry = new SkillRegistry(mockContext);
 		await registry.load();
@@ -75,7 +87,14 @@ name: test-skill
 ---
 prompt`;
 
-		vi.spyOn(fs, 'readdirSync').mockReturnValue(['test-skill.md'] as any);
+		vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+		vi.spyOn(fs, 'readdirSync').mockImplementation((_path: any, _opts?: any) => {
+			if (_opts && typeof _opts === 'object' && 'withFileTypes' in _opts) {
+				return [] as any;
+			}
+			return ['test-skill.md'] as any;
+		});
+		vi.spyOn(fs, 'statSync').mockReturnValue({ isFile: () => true } as any);
 		vi.spyOn(fs, 'readFileSync').mockReturnValue(content);
 
 		const updateSpy = vi.fn();
@@ -93,7 +112,14 @@ prompt`;
 	});
 
 	it('returns only enabled skills from enabledSkills', async () => {
-		vi.spyOn(fs, 'readdirSync').mockReturnValue(['a.md', 'b.md'] as any);
+		vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+		vi.spyOn(fs, 'readdirSync').mockImplementation((_path: any, _opts?: any) => {
+			if (_opts && typeof _opts === 'object' && 'withFileTypes' in _opts) {
+				return [] as any;
+			}
+			return ['a.md', 'b.md'] as any;
+		});
+		vi.spyOn(fs, 'statSync').mockReturnValue({ isFile: () => true } as any);
 		vi.spyOn(fs, 'readFileSync').mockImplementation((path: any) => {
 			if (path.includes('a.md')) return '---\nname: a\n---\nprompt a';
 			return '---\nname: b\n---\nprompt b';

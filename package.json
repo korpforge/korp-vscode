@@ -2,7 +2,7 @@
   "name": "korp",
   "displayName": "Korp",
   "description": "Sovereign AI coding assistant — Chat Participant @korp",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "publisher": "korpforge",
   "license": "MIT",
   "icon": "resources/korp-icon.png",
@@ -45,6 +45,34 @@
           {
             "name": "docs",
             "description": "Generate documentation for the selected code"
+          },
+          {
+            "name": "architect",
+            "description": "Ask @architect: technical design for a story (read-only)"
+          },
+          {
+            "name": "coder",
+            "description": "Ask @coder: implement a ticket and open a PR"
+          },
+          {
+            "name": "reviewer",
+            "description": "Ask @reviewer: review a PR against the design"
+          },
+          {
+            "name": "security",
+            "description": "Ask @security: audit code/PR for OWASP, secrets, deps"
+          },
+          {
+            "name": "tester",
+            "description": "Ask @tester: write tests and gate coverage"
+          },
+          {
+            "name": "docwriter",
+            "description": "Ask @docwriter: update README/CHANGELOG/docs (separate PR)"
+          },
+          {
+            "name": "deployer",
+            "description": "Ask @deployer: deploy staging and request prod approval"
           }
         ]
       }
@@ -115,6 +143,27 @@
           ],
           "default": "info",
           "description": "Log level for the Korp output channel"
+        },
+        "korp.skillSources": {
+          "type": "array",
+          "default": [],
+          "description": "Additional skill source directories. Each entry has a 'path' (relative to workspace or absolute) and 'format' (korp, bmad, or copilot).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Path to skills directory (relative to workspace root or absolute)"
+              },
+              "format": {
+                "type": "string",
+                "enum": ["flat", "directory", "proxy"],
+                "default": "flat",
+                "description": "Skill file format: flat (single .md), directory (folder/SKILL.md), proxy (.agent.md referencing another file)"
+              }
+            },
+            "required": ["path", "format"]
+          }
         }
       }
     },

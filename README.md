@@ -13,6 +13,29 @@
 
 Type `@korp` in the VS Code Chat panel to talk to your sovereign AI assistant. Context-aware: sends your active file, selection, and workspace skills automatically.
 
+### 🛠️ Agentic Workspace Tools
+
+`@korp` is **workspace-aware**: it doesn't guess file contents — it inspects your project on demand using a built-in tool protocol, the same way Copilot or Claude Code work, but routed through your sovereign gateway.
+
+The LLM can call these tools autonomously, in multi-turn loops:
+
+| Tool | Purpose |
+|------|---------|
+| `workspace_list_files` | List files in a directory |
+| `workspace_read_file` | Read a file (capped at 8 KB by default) |
+| `workspace_find_files` | Glob-match files by pattern |
+| `workspace_grep` | Search file contents (literal or regex) |
+
+**Examples:**
+
+```
+@korp Liste les fichiers TypeScript du projet
+@korp Cherche les TODO dans le code
+@korp Explique ce que fait src/extension.ts
+```
+
+Each tool call appears as a progress message in the chat. The agentic loop is capped at 8 turns and includes a loop-guard that nudges the LLM if it repeats an identical call. Tools run **client-side**, in the user's VS Code workspace — your code never leaves your machine unless the LLM asks for a specific snippet.
+
 ### 🎙️ Voice Input (Push-to-Talk & VAD)
 
 Record your voice with a single keybinding (`Cmd+Shift+K`). Powered by a local Whisper STT sidecar — no audio leaves your machine.
@@ -31,6 +54,39 @@ Extend `@korp` with markdown skill files. Drop `.md` files in `.korp/skills/` or
 - Auto-detected on workspace open
 - Toggle skills on/off from the Activity Bar
 - Live reload on file changes
+
+#### Skill Modes
+
+Skills support two modes via frontmatter:
+
+| Mode | Behaviour |
+|------|-----------|
+| `passive` (default) | Injected as background context in every message |
+| `invoke` | Activated on-demand when you type the skill name |
+
+**Invoke mode** works like BMAD Method's skill invocation — type the skill trigger directly in your prompt:
+
+```
+@korp korp-help
+@korp korp-help I just set up the stack, what's next?
+```
+
+The invoked skill becomes the sole system prompt for that request, enabling focused multi-step workflows.
+
+Example `.korp/skills/korp-help.md`:
+
+```markdown
+---
+name: korp-help
+description: Intelligent Korpforge guide
+trigger: korp-help
+mode: invoke
+---
+You are the Korpforge guide. When invoked:
+1. Inspect workspace state
+2. Determine current progress
+3. Recommend next steps
+```
 
 ### 🚀 Onboarding Wizard
 
@@ -82,6 +138,35 @@ Re-run anytime with **Korp: Run Onboarding Wizard**.
 | `korp.ttsModel` | `~/.korpforge/models/piper/fr_FR-siwis-medium.onnx` | Piper ONNX voice model |
 | `korp.vadEnabled` | `false` | Enable voice activity detection |
 | `korp.logLevel` | `info` | Output channel log level |
+| `korp.skillSources` | `[]` | Additional skill source directories (see below) |
+
+### `korp.skillSources`
+
+Add custom skill directories beyond the built-in scan paths. Each entry specifies a `path` and a `format`:
+
+| Format | Description |
+|--------|-------------|
+| `flat` | Single `.md` file per skill (frontmatter optional) |
+| `directory` | Each subfolder contains a `SKILL.md` entry point |
+| `proxy` | `.agent.md` files that reference another file via `LOAD` |
+
+Example in `.vscode/settings.json`:
+
+```jsonc
+{
+  "korp.skillSources": [
+    { "path": "_bmad/skills", "format": "directory" },
+    { "path": "/absolute/path/to/shared-skills", "format": "flat" }
+  ]
+}
+```
+
+Paths can be relative (resolved from workspace root) or absolute. Built-in sources scanned automatically:
+
+1. `.agents/skills/` — flat + directory
+2. `.github/agents/` — proxy
+3. `.korp/skills/` — flat *(deprecated)*
+4. `~/.korp/skills/` — flat (global)
 
 ---
 
