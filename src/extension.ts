@@ -12,6 +12,7 @@ import { SkillRegistry, Skill } from './skills';
 import { SkillTreeProvider } from './skill-tree';
 import { Logger, LogLevel } from './logger';
 import { runOnboarding, isOnboarded, resetOnboarding } from './onboarding';
+import { parseSourcePrRef } from './parsers';
 
 const execFileAsync = promisify(execFile);
 
@@ -452,6 +453,299 @@ const handler = async (
 
 export function deactivate() {}
 
+/**
+ * Profile B (write-capable) dispatch: POST to agent-mcp /dispatch/stream (SSE).
+ * Bypasses the intermediate VS Code LLM tool loop — the real AgentRunner runs
+ * server-side with full git/forgejo MCP access.
+ *
+ * Consumes SSE events (progress, usage, budget_warning, done, error) and
+ * renders progress live in the chat. If the stream is interrupted before
+ * the `done` event, surfaces a friendly message: the server-side dispatch
+ * continues regardless (PR will still land on Forgejo).
+ *
+ * Falls back to the legacy `/dispatch` (sync, single JSON) if the server
+ * returns 404 — preserves backwards compat with older agent-mcp builds.
+ */
+async function dispatchToAgentMcp(
+	subagent: SubagentCommand,
+	prompt: string,
+	stream: vscode.ChatResponseStream,
+	token: vscode.CancellationToken,
+	context?: Record<string, unknown>,
+): Promise<void> {
+	const cfg = vscode.workspace.getConfiguration('korp');
+	const agentMcpUrl = cfg.get<string>('agentMcpUrl', 'http://localhost:9300');
+	const baseUrl = agentMcpUrl.replace(/\/$/, '');
+	const endpoint = `${baseUrl}/dispatch/stream`;
+
+	const abortController = new AbortController();
+	let userCancelled = false;
+	token.onCancellationRequested(() => {
+		userCancelled = true;
+		abortController.abort();
+	});
+
+	chatLog.info(`[${subagent.agentId}] POST ${endpoint} (Profile B SSE dispatch)`);
+	stream.progress(`${subagent.icon} Dispatching to agent-mcp…`);
+
+	const body = JSON.stringify({
+		agent: `@${subagent.agentId}`,
+		task: prompt,
+		...(context ? { context } : {}),
+	});
+
+	let response: Response;
+	try {
+		response = await fetch(endpoint, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+			body,
+			signal: abortController.signal,
+		});
+	} catch (err: any) {
+		if (err.name === 'AbortError') {
+			stream.markdown(`\n\n_Cancelled by user. Dispatch continues server-side — watch Forgejo for the PR._`);
+			return;
+		}
+		chatLog.error(`[${subagent.agentId}] dispatch error: ${err.message}`);
+		stream.markdown(`\n\n⚠️ **${subagent.label} dispatch failed**: ${err.message}\n\nIs agent-mcp running on ${agentMcpUrl}?`);
+		return;
+	}
+
+	// Fallback to legacy /dispatch if the server does not know /dispatch/stream
+	// (older agent-mcp build without AGT-30 Phase A).
+	if (response.status === 404) {
+		chatLog.warn(`[${subagent.agentId}] /dispatch/stream → 404, falling back to legacy /dispatch`);
+		await dispatchToAgentMcpLegacy(subagent, body, stream, abortController, agentMcpUrl);
+		return;
+	}
+
+	if (!response.ok) {
+		const text = await response.text().catch(() => '');
+		chatLog.error(`[${subagent.agentId}] HTTP ${response.status}: ${text}`);
+		stream.markdown(`\n\n⚠️ **${subagent.label} HTTP ${response.status}** : ${text || response.statusText}`);
+		return;
+	}
+
+	const reader = response.body?.getReader();
+	if (!reader) {
+		stream.markdown(`\n\n⚠️ **${subagent.label}** : no response body from /dispatch/stream`);
+		return;
+	}
+
+	const decoder = new TextDecoder();
+	let buffer = '';
+	let doneResult: any = null;
+	let streamError: string | null = null;
+	let progressCount = 0;
+
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) { break; }
+			buffer += decoder.decode(value, { stream: true });
+
+			// SSE events are delimited by a blank line (\n\n).
+			let sep: number;
+			while ((sep = buffer.indexOf('\n\n')) !== -1) {
+				const rawEvent = buffer.slice(0, sep);
+				buffer = buffer.slice(sep + 2);
+				const parsed = parseSseEvent(rawEvent);
+				if (!parsed) { continue; }
+				const { event, data } = parsed;
+
+				if (event === 'progress') {
+					progressCount++;
+					const iter = data?.iter ?? '?';
+					const tool: string = data?.tool ?? '?';
+					const status = data?.status ?? 'start';
+					const summary: string = data?.summary ?? data?.label ?? tool;
+					// Render each completed tool call as a single line prefixed by
+					// a small emoji (Copilot-style trace). Codicons `$(name)` are
+					// stripped by the chat markdown renderer, so we use a curated
+					// emoji set instead.
+					if (status === 'done') {
+						stream.markdown(`${emojiForTool(tool)} ${summary}\n\n`);
+					} else if (status === 'error') {
+						stream.markdown(`❌ ${summary}\n\n`);
+						chatLog.warn(`[${subagent.agentId}] tool error iter=${iter} ${tool}`);
+					} else if (status === 'start') {
+						// Keep the transient progress indicator on "start" so the
+						// user sees something is happening during a long tool call.
+						stream.progress(`${subagent.icon} ${tool}…`);
+					}
+				} else if (event === 'usage') {
+					chatLog.info(`[${subagent.agentId}] usage: ${data?.input}in / ${data?.output}out = $${data?.cost_usd?.toFixed?.(4) ?? data?.cost_usd}`);
+				} else if (event === 'budget_warning') {
+					stream.markdown(`\n\n⚠️ Budget @${data?.agent ?? subagent.agentId} : ${data?.percent ?? '?'}%\n`);
+				} else if (event === 'done') {
+					doneResult = data;
+				} else if (event === 'error') {
+					streamError = data?.error ?? 'unknown error';
+				}
+			}
+		}
+	} catch (err: any) {
+		// Stream interrupted (network error, server reset, …). Dispatch keeps
+		// running server-side — do NOT surface as fatal.
+		if (err.name === 'AbortError') {
+			if (userCancelled) {
+				stream.markdown(`\n\n_Cancelled by user. The dispatch continues server-side — watch Forgejo for the PR._`);
+				return;
+			}
+		}
+		chatLog.warn(`[${subagent.agentId}] SSE stream interrupted after ${progressCount} events: ${err.message}`);
+		if (!doneResult) {
+			stream.markdown(
+				`\n\n⚠️ **Connection lost** after ${progressCount} progress events, but the dispatch continues server-side. ` +
+				`Watch Forgejo for the PR — or check \`agent-mcp\` logs for the final status.\n`,
+			);
+			return;
+		}
+	}
+
+	if (streamError && !doneResult) {
+		stream.markdown(`\n\n⚠️ **${subagent.label}** error: ${streamError}`);
+		return;
+	}
+
+	if (!doneResult) {
+		stream.markdown(
+			`\n\n⚠️ Stream ended without a \`done\` event (server closed cleanly but no final result). ` +
+			`Dispatch may still be running — check Forgejo.\n`,
+		);
+		return;
+	}
+
+	renderDispatchResult(subagent, doneResult, stream, { liveStepsShown: true });
+}
+
+/**
+ * Map an MCP tool name to a small emoji used for the live trace. Choice is
+ * by tool *category* so the visual stays stable as new tools land. Falls
+ * back to a neutral marker when the tool is unknown.
+ */
+function emojiForTool(tool: string): string {
+	// Forge mutations
+	if (tool === 'create_pr') { return '🔀'; }
+	if (tool === 'comment_pr') { return '💬'; }
+	// Git mutations
+	if (tool === 'git_branch') { return '🌿'; }
+	if (tool === 'git_commit' || tool === 'git_commit_as') { return '💾'; }
+	if (tool === 'git_push') { return '⬆️'; }
+	if (tool === 'git_ensure_clone') { return '⬇️'; }
+	if (tool === 'git_add') { return '➕'; }
+	// File mutations
+	if (tool === 'patch_file') { return '✏️'; }
+	// Shell
+	if (tool === 'run_command') { return '💻'; }
+	// Read / search
+	if (tool === 'read_file' || tool === 'list_directory') { return '📄'; }
+	if (tool === 'grep_content') { return '🔍'; }
+	if (tool === 'get_pr' || tool === 'list_prs') { return '🔎'; }
+	if (tool === 'list_labels') { return '🏷️'; }
+	// Git read-only (log/show/diff/status/branches/…)
+	if (tool.startsWith('git_')) { return '📜'; }
+	return '•';
+}
+
+interface SseEvent {
+	event: string;
+	data: any;
+}
+
+/** Parse a raw SSE event block (lines separated by `\n`, terminated by a blank line removed by caller). */
+function parseSseEvent(raw: string): SseEvent | null {
+	let event = 'message';
+	const dataLines: string[] = [];
+	for (const line of raw.split('\n')) {
+		if (!line || line.startsWith(':')) { continue; }
+		if (line.startsWith('event:')) {
+			event = line.slice(6).trim();
+		} else if (line.startsWith('data:')) {
+			dataLines.push(line.slice(5).trimStart());
+		}
+	}
+	if (dataLines.length === 0) { return null; }
+	const dataStr = dataLines.join('\n');
+	try {
+		return { event, data: JSON.parse(dataStr) };
+	} catch {
+		return { event, data: dataStr };
+	}
+}
+
+function renderDispatchResult(
+	subagent: SubagentCommand,
+	result: any,
+	stream: vscode.ChatResponseStream,
+	options: { liveStepsShown?: boolean } = {},
+): void {
+	chatLog.info(`[${subagent.agentId}] done: status=${result.status} iter=${result.iterations} model=${result.model}`);
+
+	const statusIcon = result.status === 'success' ? '✅'
+		: result.status === 'max_iterations' ? '⏱️'
+		: result.status === 'dry_run' ? '🔍'
+		: '❌';
+	const tokens = (result.tokens_used?.input ?? 0) + (result.tokens_used?.output ?? 0);
+	stream.markdown(
+		`${statusIcon} **${subagent.label}** — status: \`${result.status}\` · ` +
+		`model: \`${result.model}\` · iter: ${result.iterations} · tokens: ${tokens}\n\n`,
+	);
+	if (result.result) {
+		stream.markdown(`${result.result}\n`);
+	}
+	// Skip the Actions block when steps were already rendered live (SSE path).
+	// The legacy /dispatch path has no live trace, so it still needs the recap.
+	if (!options.liveStepsShown && Array.isArray(result.actions) && result.actions.length > 0) {
+		stream.markdown(`\n<details><summary>Actions (${result.actions.length})</summary>\n\n`);
+		for (let i = 0; i < result.actions.length; i++) {
+			stream.markdown(`${i + 1}. \`${result.actions[i]}\`\n`);
+		}
+		stream.markdown(`\n</details>\n`);
+	}
+}
+
+/** Legacy sync /dispatch path, used only when /dispatch/stream returns 404. */
+async function dispatchToAgentMcpLegacy(
+	subagent: SubagentCommand,
+	body: string,
+	stream: vscode.ChatResponseStream,
+	abortController: AbortController,
+	agentMcpUrl: string,
+): Promise<void> {
+	const endpoint = `${agentMcpUrl.replace(/\/$/, '')}/dispatch`;
+	let response: Response;
+	try {
+		response = await fetch(endpoint, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body,
+			signal: abortController.signal,
+		});
+	} catch (err: any) {
+		if (err.name === 'AbortError') {
+			stream.markdown(`\n\n_Cancelled by user. Dispatch continues server-side — watch Forgejo for the PR._`);
+			return;
+		}
+		stream.markdown(`\n\n⚠️ **${subagent.label} dispatch failed**: ${err.message}\n\nIs agent-mcp running on ${agentMcpUrl}?`);
+		return;
+	}
+	if (!response.ok) {
+		const text = await response.text().catch(() => '');
+		stream.markdown(`\n\n⚠️ **${subagent.label} HTTP ${response.status}** : ${text || response.statusText}`);
+		return;
+	}
+	let result: any;
+	try {
+		result = await response.json();
+	} catch (err: any) {
+		stream.markdown(`\n\n⚠️ Invalid JSON from agent-mcp: ${err.message}`);
+		return;
+	}
+	renderDispatchResult(subagent, result, stream);
+}
+
 async function handleSubagentRequest(
 	subagent: SubagentCommand,
 	request: vscode.ChatRequest,
@@ -490,10 +784,38 @@ async function handleSubagentRequest(
 
 	stream.markdown(`${subagent.icon} **@${subagent.agentId}** is on it…\n\n`);
 
-	// Subagents get the SAME workspace_* tool proxy as @korp. These tools are executed
-	// locally by the VS Code extension (not by OpenClaw), so the agent's OpenClaw-side
-	// tool deny list (read/write/edit/exec) does not block them.
+	// Profile B (write-capable: coder, tester, docwriter) = forge agents that need
+	// to actually commit, push, and open PRs. They cannot do this from the VS Code
+	// LLM tool loop (which only exposes workspace_* read-only tools). Instead, we
+	// bypass the intermediate LLM and dispatch directly to agent-mcp's POST /dispatch
+	// endpoint, which spawns a real AgentRunner with full git/forgejo MCP access.
+	if (subagent.profile === 'B') {
+		// @docwriter requires a source PR reference in the prompt.
+		// The agent-mcp runner validates source_pr is a merged PR (see agent-runner.ts).
+		let ctx: Record<string, unknown> | undefined;
+		if (subagent.agentId === 'docwriter') {
+			const ref = parseSourcePrRef(prompt);
+			if (!ref) {
+				stream.markdown(
+					`⚠️ **@docwriter** needs a source PR reference. Expected format:\n\n` +
+					`\`/docwriter <owner>/<repo>#<N>\`  — e.g. \`/docwriter korpforge/agent-mcp#4\`\n\n` +
+					`or long form: \`/docwriter --source-pr 4 repo=korpforge/agent-mcp\`\n`,
+				);
+				return;
+			}
+			ctx = { source_pr: ref.source_pr, owner: ref.owner, repo: ref.repo };
+			chatLog.info(`[docwriter] source_pr=${ref.source_pr} owner=${ref.owner} repo=${ref.repo}`);
+		}
+		await dispatchToAgentMcp(subagent, prompt, stream, token, ctx);
+		return;
+	}
+
+	// Profile A (read-capable: architect, reviewer, security, deployer) = advisory.
+	// They keep the chat history and active editor context, and answer via the local
+	// LLM tool loop with workspace_* tools.
+	const isStateless = false;
 	const messages: ChatMessage[] = [];
+
 	messages.push({
 		role: 'system',
 		content: [
@@ -502,61 +824,65 @@ async function handleSubagentRequest(
 			``,
 			`MANDATORY RULES:`,
 			`1. NEVER mention "bootstrap", "BOOTSTRAP.md", "workspace not bootstrapped", "identity setup", or any onboarding ritual. You are ALREADY operational.`,
-			`2. If the answer is already present in the "Prior conversation" block below, answer DIRECTLY without calling tools. Re-read past turns BEFORE exploring the filesystem.`,
+			isStateless
+				? `2. Treat the user message as the SOLE task. There is NO prior conversation context. Never assume the task is similar to anything you did before — parse the user message literally (e.g. "owner/repo#N" = that exact repo and issue, nothing else). If the user message is ambiguous or missing required arguments, STOP and ask — do not guess from past experience.`
+				: `2. If the answer is already present in the "Prior conversation" block below, answer DIRECTLY without calling tools. Re-read past turns BEFORE exploring the filesystem.`,
 			`3. If you must explore, call AT MOST 2 listing/finding tools (workspace_list_files, workspace_find_files, workspace_grep) before reading a specific file with workspace_read_file. Do NOT keep listing.`,
-			`4. NEVER cite content you have not received in a tool result or in the prior conversation.`,
+			`4. NEVER cite content you have not received in a tool result${isStateless ? '' : ' or in the prior conversation'}.`,
 			`5. If a tool call returns an error, surface it verbatim — do not fabricate.`,
 			``,
 			`Always reply in the same language the user wrote in. Code stays in its original language.`,
 		].join('\n'),
 	});
 
-	// Inject prior chat turns as a SINGLE saliency-boosted system block (instead of fake user/assistant
-	// turns) so the subagent treats it as authoritative context rather than just "another exchange".
-	const history = chatContext.history ?? [];
-	const historyLines: string[] = [];
-	for (const turn of history) {
-		if (turn instanceof vscode.ChatRequestTurn) {
-			const prefix = turn.command ? `/${turn.command} ` : '';
-			historyLines.push(`### 👤 User: ${prefix}${turn.prompt}`.slice(0, 4000));
-		} else if (turn instanceof vscode.ChatResponseTurn) {
-			const text = turn.response
-				.map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
-				.join('').trim();
-			if (text) {
-				historyLines.push(`### 🤖 Assistant:\n${text}`.slice(0, 4000));
+	// Profile A only: inject prior chat turns as a SINGLE saliency-boosted system block
+	// (instead of fake user/assistant turns) so the subagent treats it as authoritative context.
+	if (!isStateless) {
+		const history = chatContext.history ?? [];
+		const historyLines: string[] = [];
+		for (const turn of history) {
+			if (turn instanceof vscode.ChatRequestTurn) {
+				const prefix = turn.command ? `/${turn.command} ` : '';
+				historyLines.push(`### 👤 User: ${prefix}${turn.prompt}`.slice(0, 4000));
+			} else if (turn instanceof vscode.ChatResponseTurn) {
+				const text = turn.response
+					.map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
+					.join('').trim();
+				if (text) {
+					historyLines.push(`### 🤖 Assistant:\n${text}`.slice(0, 4000));
+				}
 			}
 		}
-	}
-	if (historyLines.length > 0) {
-		messages.push({
-			role: 'system',
-			content: `Prior conversation in this VS Code chat (use it as your primary context — do not re-explore what is already here):\n\n${historyLines.join('\n\n')}`,
-		});
-	}
+		if (historyLines.length > 0) {
+			messages.push({
+				role: 'system',
+				content: `Prior conversation in this VS Code chat (use it as your primary context — do not re-explore what is already here):\n\n${historyLines.join('\n\n')}`,
+			});
+		}
 
-	// Inject active editor context (same pattern as @korp).
-	const editor = vscode.window.activeTextEditor;
-	if (editor) {
-		const doc = editor.document;
-		const selection = editor.selection;
-		const relPath = vscode.workspace.asRelativePath(doc.uri);
-		if (!selection.isEmpty) {
-			const selectedText = doc.getText(selection);
-			const capped = selectedText.length > 4000 ? selectedText.slice(0, 4000) + '\n…(truncated)' : selectedText;
-			messages.push({
-				role: 'system',
-				content:
-					`Active editor selection — file: ${relPath} (${doc.languageId}), ` +
-					`lines ${selection.start.line + 1}-${selection.end.line + 1}:\n\`\`\`\n${capped}\n\`\`\``,
-			});
-		} else {
-			messages.push({
-				role: 'system',
-				content:
-					`Active editor: ${relPath} (${doc.languageId}). ` +
-					`Use workspace_read_file to fetch its content if relevant.`,
-			});
+		// Inject active editor context (same pattern as @korp) — only relevant for advisory agents.
+		const editor = vscode.window.activeTextEditor;
+		if (editor) {
+			const doc = editor.document;
+			const selection = editor.selection;
+			const relPath = vscode.workspace.asRelativePath(doc.uri);
+			if (!selection.isEmpty) {
+				const selectedText = doc.getText(selection);
+				const capped = selectedText.length > 4000 ? selectedText.slice(0, 4000) + '\n…(truncated)' : selectedText;
+				messages.push({
+					role: 'system',
+					content:
+						`Active editor selection — file: ${relPath} (${doc.languageId}), ` +
+						`lines ${selection.start.line + 1}-${selection.end.line + 1}:\n\`\`\`\n${capped}\n\`\`\``,
+				});
+			} else {
+				messages.push({
+					role: 'system',
+					content:
+						`Active editor: ${relPath} (${doc.languageId}). ` +
+						`Use workspace_read_file to fetch its content if relevant.`,
+				});
+			}
 		}
 	}
 
